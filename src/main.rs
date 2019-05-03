@@ -112,19 +112,17 @@ fn main() -> io::Result<()> {
         let mut pstream = PacketStream::new(box_r);
         let mut psink = PacketSink::new(box_w);
 
-        await!(psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 1, r#"{"name":["createUserStream"],"args": [{"id": "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519", "limit": 10}], "type":"source"}"#.into())));
+        await!(psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 1, r#"{"name":["createHistoryStream"],"args": [{"id": "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519", "limit": 10}], "type":"source"}"#.into())));
 
         let done = pstream.for_each(|r| {
             match r {
                 Ok(p) => {
                     log_packet(&p);
-                    eprintln!("{:?}", p.id);
-
-                    let s = str::from_utf8(&p.body).unwrap();
-                    if s.contains("createWants") {
-                         psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, -p.id, "{}".into()))
-                             .map(|result| println!("{:?}", result));
-                    }
+                    //let s = str::from_utf8(&p.body).unwrap();
+                    //if s.contains("createWants") {
+                    //     psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, -p.id, "{}".into()))
+                    //         .map(|result| println!("{:?}", result));
+                    //}
                     // } else {
                     //     future::ready(())
                     // }
