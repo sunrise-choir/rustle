@@ -89,10 +89,12 @@ fn main() -> io::Result<()> {
 
     let net_id = NetworkKey::SSB_MAIN_NET;
 
-    let key = "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84=";
-    let addr = "134.209.164.64:8008";
+    //let key = "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84=";
+    //let addr = "134.209.164.64:8008";
     // let key = "Kpfvv1sVbLxx+u60qz57hIL6lvjs0/ICt0RNoNW835A=";
     // let addr = "127.0.0.1:9009";
+    let key = "U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=";
+    let addr = "127.0.0.1:8008";
 
     let server_pk = PublicKey::from_slice(&base64::decode(key).unwrap()).unwrap();
 
@@ -100,6 +102,7 @@ fn main() -> io::Result<()> {
         let mut tcp = await!(TcpStream::connect(&addr.parse().unwrap()))?;
 
         let o = await!(client(&mut tcp, net_id, pk, sk, server_pk)).unwrap();
+        dbg!("client connected");
 
         // dbg!(o.c2s_key.as_slice());
 
@@ -109,13 +112,19 @@ fn main() -> io::Result<()> {
         let mut pstream = PacketStream::new(box_r);
         let mut psink = PacketSink::new(box_w);
 
+        await!(psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 1, r#"{"name":["createUserStream"],"args": [{"id": "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519", "limit": 10}], "type":"source"}"#.into())));
+
         let done = pstream.for_each(|r| {
             match r {
                 Ok(p) => {
                     log_packet(&p);
-                    // if p.body.to_str().contains("createWants") {
-                    //     psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, -p.id, "{}".into()))
-                    //         .map(|_| ())
+                    eprintln!("{:?}", p.id);
+
+                    let s = str::from_utf8(&p.body).unwrap();
+                    if s.contains("createWants") {
+                         psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, -p.id, "{}".into()))
+                             .map(|result| println!("{:?}", result));
+                    }
                     // } else {
                     //     future::ready(())
                     // }
