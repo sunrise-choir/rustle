@@ -23,8 +23,8 @@ extern crate serde_json;
 #[macro_use] extern crate serde_derive;
 
 use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
-use shs_async::client;
-use boxstream::BoxStream;
+use ssb_handshake::client;
+use ssb_boxstream::BoxStream;
 use packetstream::*;
 
 #[derive(Debug, Deserialize)]
