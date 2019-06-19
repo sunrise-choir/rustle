@@ -1,4 +1,4 @@
-#![feature(async_await, await_macro, futures_api)]
+#![feature(async_await)]
 
 #![allow(unused_imports)]
 
@@ -8,7 +8,7 @@ use std::str;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{decode_config_slice, STANDARD};
-use clap::{Arg, App};
+use clap::{Arg, App, SubCommand};
 
 use futures::StreamExt;
 use futures::executor::{self, ThreadPool};
@@ -19,13 +19,15 @@ use futures::sink::SinkExt;
 use futures::task::{SpawnExt};
 use romio::{TcpListener, TcpStream};
 
-extern crate serde_json;
+#[macro_use] extern crate serde_json;
 #[macro_use] extern crate serde_derive;
+
+use serde_json::json;
 
 use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_handshake::client;
 use ssb_boxstream::BoxStream;
-use packetstream::*;
+use ssb_packetstream::*;
 
 #[derive(Debug, Deserialize)]
 struct SecretFile {
@@ -82,70 +84,97 @@ fn main() -> io::Result<()> {
              .required(true)
              .takes_value(true)
              .help("ssb secret (key) file"))
+        .subcommand(SubCommand::with_name("getfeed")
+                    .about("Send createHistoryStream request")
+                    .arg(Arg::with_name("addr")
+                         .long("addr")
+                         .short("a")
+                         .takes_value(true)
+                         .default_value("127.0.0.1:8008")
+                         .help("ip:port of peer"))
+                    .arg(Arg::with_name("key")
+                         .long("key")
+                         .short("k")
+                         .required(true)
+                         .takes_value(true)
+                         .help("base64-encoded public key of peer"))
+                    .arg(Arg::with_name("feed")
+                         .long("feed")
+                         .short("f")
+                         .required(true)
+                         .takes_value(true)
+                         .help("feed (user) id (eg. \"@N/vWpVVdD...\""))
+                    .arg(Arg::with_name("limit")
+                         .long("limit")
+                         .short("n")
+                         .takes_value(true)
+                         .help(""))
+        )
         .get_matches();
 
-    let secret_path = app_m.value_of("secret").unwrap();
-    let (pk, sk) = load_keys_from_path(&secret_path)?;
+    match app_m.subcommand() {
+        ("getfeed", Some(sub_m)) => {
+            let secret_path = app_m.value_of("secret").unwrap();
+            let feed_id = sub_m.value_of("feed").unwrap();
+            let peer_key = sub_m.value_of("key").unwrap();
+            let peer_addr = sub_m.value_of("addr").unwrap();
 
-    let net_id = NetworkKey::SSB_MAIN_NET;
+            let (pk, sk) = load_keys_from_path(&secret_path)?;
 
-    //let key = "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84=";
-    //let addr = "134.209.164.64:8008";
-    // let key = "Kpfvv1sVbLxx+u60qz57hIL6lvjs0/ICt0RNoNW835A=";
-    // let addr = "127.0.0.1:9009";
-    let key = "U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=";
-    let addr = "127.0.0.1:8008";
+            let net_id = NetworkKey::SSB_MAIN_NET;
 
-    let server_pk = PublicKey::from_slice(&base64::decode(key).unwrap()).unwrap();
+            // let key = "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84=";
+            // let addr = "134.209.164.64:8008";
+            // let key = "Kpfvv1sVbLxx+u60qz57hIL6lvjs0/ICt0RNoNW835A=";
+            // let addr = "127.0.0.1:9009";
+            // let key = "U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=";
+            // let addr = "127.0.0.1:8008";
 
-    executor::block_on(async {
-        let mut tcp = await!(TcpStream::connect(&addr.parse().unwrap()))?;
+            let server_pk = PublicKey::from_slice(&base64::decode(peer_key).unwrap()).unwrap();
 
-        let o = await!(client(&mut tcp, net_id, pk, sk, server_pk)).unwrap();
-        dbg!("client connected");
+            executor::block_on(async {
+                let mut tcp = TcpStream::connect(&peer_addr.parse().unwrap()).await?;
 
-        // dbg!(o.c2s_key.as_slice());
+                let o = client(&mut tcp, net_id, pk, sk, server_pk).await.unwrap();
+                dbg!("client connected");
 
-        let (tcp_r, tcp_w) = tcp.split();
+                // dbg!(o.c2s_key.as_slice());
 
-        let (box_r, box_w) = BoxStream::client_side(tcp_r, tcp_w, o).split();
-        let mut pstream = PacketStream::new(box_r);
-        let mut psink = PacketSink::new(box_w);
+                let (tcp_r, tcp_w) = tcp.split();
 
-        await!(psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 1, r#"{"name":["createHistoryStream"],"args": [{"id": "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519", "limit": 10}], "type":"source"}"#.into())));
+                let (box_r, box_w) = BoxStream::client_side(tcp_r, tcp_w, o).split();
+                let pstream = PacketStream::new(box_r);
+                let mut psink = PacketSink::new(box_w);
 
-        let done = pstream.for_each(|r| {
-            match r {
-                Ok(p) => {
-                    log_packet(&p);
-                    //let s = str::from_utf8(&p.body).unwrap();
-                    //if s.contains("createWants") {
-                    //     psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, -p.id, "{}".into()))
-                    //         .map(|result| println!("{:?}", result));
-                    //}
-                    // } else {
-                    //     future::ready(())
-                    // }
-                },
-                Err(e) => eprintln!("PacketStream error: {}", e),
-            };
-            future::ready(())
-        });
-        await!(done);
+                let msg = serde_json::to_vec(&json!({
+                    "name": ["createHistoryStream"],
+                    "args": [{
+                        "id": feed_id,
+                        "limit": 10
+                    }],
+                    "type":"source"}))?;
 
-        // let m = "{ name: [ 'gossip', 'ping' ], args: [ { timeout: 300000 } ], type: 'duplex' }";
-        // await!(psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 2, m.into()))).unwrap();
+                psink.send(Packet::new(IsStream::Yes, IsEnd::No, BodyType::Json, 1, msg)).await?;
 
-        // let m = format!("{}", ms_since_1970());
-        // await!(psink.send(Packet::new(IsStream::No, IsEnd::No, BodyType::Json, 2, m.into()))).unwrap();
+                let done = pstream.for_each(|r| {
+                    match r {
+                        Ok(p) => {
+                            log_packet(&p);
+                        },
+                        Err(e) => eprintln!("PacketStream error: {}", e),
+                    };
+                    future::ready(())
+                });
+                done.await;
 
-        // let p = await!(pstream.next()).unwrap()?;
-        // log_packet(&p);
+                Ok(())
+            })
+        },
 
-        // await!(psink.send(Packet::new(IsStream::Yes, IsEnd::Yes, BodyType::Json, -p.id,
-        //                               "true".into()))).unwrap();
+        _ => {
+            println!("{}", app_m.usage());
+            Ok(())
+        }
+    }
 
-
-        Ok(())
-    })
 }
