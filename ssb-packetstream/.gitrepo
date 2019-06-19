@@ -5,8 +5,8 @@
 ;
 [subrepo]
 	remote = git@github.com:sunrise-choir/ssb-packetstream.git
-	branch = master
-	commit = 7f35be3b3cd69426fb6e1b4312a65e8cf7ecc4da
-	parent = 8a86c84ab0dd625280f1df921c31313cc5955176
+	branch = mux
+	commit = efd64f172209d41f528864ca868afc5cacaaf430
+	parent = 530d3f9c97dae951317eba6f049610a576e050a0
 	method = merge
 	cmdver = 0.4.0
