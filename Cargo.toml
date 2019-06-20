@@ -1,3 +1,6 @@
 [workspace]
 
-members = ["rustle"]
+members = [
+  "rustle",
+  "ssb-packetstream"
+]
