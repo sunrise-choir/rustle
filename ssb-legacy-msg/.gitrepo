@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:sunrise-choir/ssb-legacy-msg.git
+	branch = master
+	commit = 582b628810c3a07f48b865820197bbf5e297f4a0
+	parent = 9a89316b6bec72abf997017a7a0763429e86d650
+	method = merge
+	cmdver = 0.4.0
