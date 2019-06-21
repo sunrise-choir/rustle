@@ -221,25 +221,26 @@ fn main() -> Result<(), Error> {
             })?;
             eprintln!("client connected");
 
-            let msg1 = create_hist_stream_msg(feed_id, feed_seq, feed_limit);
-
             let mut pool = LocalPool::new();
             let mut spawner = pool.spawner();
 
             let (mut out, done) = mux::mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
-            let r1 = spawner.spawn_local_with_handle(async move {
-                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg1).await?;
+            let msg = create_hist_stream_msg(feed_id, feed_seq, feed_limit);
+
+            let r = async move {
+                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
                 a_in.for_each(|p| {
                     // log_packet(&p);
                     out_log.append(&p.body).unwrap();
                     future::ready(())
                 }).await;
                 a_out.send_end(BodyType::Json, "true".bytes().collect()).await
-            }).unwrap();
+            };
 
-            let _r = spawner.spawn_local_with_handle(r1).unwrap();
+            let r = spawner.spawn_local_with_handle(r).unwrap();
+            pool.run_until(r).unwrap();
             pool.run_until(done).unwrap();
 
             Ok(())
