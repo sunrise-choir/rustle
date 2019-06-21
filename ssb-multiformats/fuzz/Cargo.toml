@@ -1,0 +1,50 @@
+
+[package]
+name = "ssb-multiformats-fuzz"
+version = "0.0.1"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.ssb-multiformats]
+path = ".."
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "roundtrip_key"
+path = "fuzz_targets/roundtrip_key.rs"
+
+[[bin]]
+name = "roundtrip_hash"
+path = "fuzz_targets/roundtrip_hash.rs"
+
+[[bin]]
+name = "roundtrip_feed"
+path = "fuzz_targets/roundtrip_feed.rs"
+
+[[bin]]
+name = "roundtrip_box"
+path = "fuzz_targets/roundtrip_box.rs"
+
+[[bin]]
+name = "roundtrip_key_compact"
+path = "fuzz_targets/roundtrip_key_compact.rs"
+
+[[bin]]
+name = "roundtrip_hash_compact"
+path = "fuzz_targets/roundtrip_hash_compact.rs"
+
+[[bin]]
+name = "roundtrip_feed_compact"
+path = "fuzz_targets/roundtrip_feed_compact.rs"
+
+[[bin]]
+name = "roundtrip_box_compact"
+path = "fuzz_targets/roundtrip_box_compact.rs"
