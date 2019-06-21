@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:sunrise-choir/legacy-msg-data.git
+	branch = master
+	commit = 0defe6bd6489861e8e09e9cf30a8d828c0672e84
+	parent = 814a4a8e5d8177dc1225641c9c4b9613627d5b44
+	method = merge
+	cmdver = 0.4.0
