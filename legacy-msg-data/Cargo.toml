@@ -4,11 +4,11 @@ version = "0.1.0"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 
 [dependencies]
-serde = "1.0.80"
-serde_derive = "1.0.80"
-base64 = "0.9.3"
-indexmap = "1.0.1"
+serde = "1.0.92"
+serde_derive = "1.0.92"
+base64 = "0.10.1"
+indexmap = "1.0.2"
 ryu-ecmascript = "0.1.1"
 # strtod = "0.0.2"
 strtod = { git = "https://github.com/ssbrs/strtod" }
-encode_unicode = "0.3.3"
+encode_unicode = "0.3.5"
