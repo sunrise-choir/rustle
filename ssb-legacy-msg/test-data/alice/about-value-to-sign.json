@@ -1,0 +1,14 @@
+{
+  "previous": null,
+  "sequence": 1,
+  "author": "@H2qXeS5sOKUqaGNFgRJ6qR48+lAeP0C9lq9IVlQMotc=.ed25519",
+  "timestamp": 1561605279901,
+  "hash": "sha256",
+  "content": {
+    "type": "about",
+    "about": "@H2qXeS5sOKUqaGNFgRJ6qR48+lAeP0C9lq9IVlQMotc=.ed25519",
+    "image": null,
+    "name": "Alice",
+    "description": "crypto fanatic"
+  }
+}
