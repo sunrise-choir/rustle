@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:sunrise-choir/ssb-legacy-msg.git
 	branch = master
-	commit = 582b628810c3a07f48b865820197bbf5e297f4a0
-	parent = 9a89316b6bec72abf997017a7a0763429e86d650
+	commit = 8b7825969ab4aaa6fe1922b26dcb86a9469f752a
+	parent = 6847d765d58393119759da50be62a95d20776707
 	method = merge
 	cmdver = 0.4.0
