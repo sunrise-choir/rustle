@@ -4,7 +4,7 @@ extern crate strtod;
 extern crate ssb_legacy_msg_data;
 extern crate ssb_multiformats;
 
-use ssb_legacy_msg_data::{LegacyF64, value::Value};
+use ssb_legacy_msg_data::LegacyF64;
 use ssb_multiformats::{
     multihash::Multihash,
     multikey::{Multikey, Multisig},
@@ -47,6 +47,7 @@ impl<T> Message<T> {
 #[cfg(test)]
 mod tests {
     use std::fs::read_to_string;
+    use ssb_legacy_msg_data::{value::Value};
     use super::*;
 
     #[test]
@@ -54,7 +55,8 @@ mod tests {
         // js-produced signing encoding (methinks)
         let s = read_to_string("./test-data/alice/about-value-from-log.json").unwrap();
         dbg!(&s);
-        let (msg, rest) = json::from_legacy::<Value>(&s.as_bytes()).unwrap();
+
+        let (msg, _rest) = json::from_legacy::<Value>(&s.as_bytes()).unwrap();
 
         eprintln!("msg: {:?}", msg);
 

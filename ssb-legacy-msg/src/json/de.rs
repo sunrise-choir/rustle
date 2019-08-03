@@ -1,3 +1,4 @@
+use std::slice::SliceIndex;
 use serde::de::DeserializeOwned;
 use strtod::strtod;
 
@@ -13,9 +14,15 @@ use ssb_legacy_msg_data::json;
 
 use super::super::{Message, Content};
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct DecodeJsonError {
+    pub code: ErrorCode,
+    pub position: usize,
+}
+
 /// Everything that can go wrong when decoding a `Message` from legacy json.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodeJsonError {
+pub enum ErrorCode {
     /// Needed more data but got EOF instead.
     UnexpectedEndOfInput,
     /// Expected a decimal digit.
@@ -41,36 +48,52 @@ pub enum DecodeJsonError {
     InvalidPrivateContent(multibox::DecodeLegacyError),
     ExpectedSignature,
     InvalidSignature(DecodeSignatureError),
-    Content(json::DecodeJsonError),
+    Content(json::ErrorCode),
 }
 
-impl From<json::DecodeJsonError> for DecodeJsonError {
-    fn from(e: json::DecodeJsonError) -> DecodeJsonError {
-        DecodeJsonError::Content(e)
+// TODO: From<tuple> is ugly
+impl From<(json::DecodeJsonError, usize)> for DecodeJsonError {
+    fn from((e, pos): (json::DecodeJsonError, usize)) -> DecodeJsonError {
+        DecodeJsonError {
+            code: ErrorCode::Content(e.code),
+            position: pos + e.position
+        }
     }
 }
 
-impl From<multihash::DecodeLegacyError> for DecodeJsonError {
-    fn from(e: multihash::DecodeLegacyError) -> DecodeJsonError {
-        DecodeJsonError::InvalidPrevious(e)
+impl From<(multihash::DecodeLegacyError, usize)> for DecodeJsonError {
+    fn from((e, pos): (multihash::DecodeLegacyError, usize)) -> DecodeJsonError {
+        DecodeJsonError {
+            code: ErrorCode::InvalidPrevious(e),
+            position: pos,
+        }
     }
 }
 
-impl From<multikey::DecodeLegacyError> for DecodeJsonError {
-    fn from(e: multikey::DecodeLegacyError) -> DecodeJsonError {
-        DecodeJsonError::InvalidAuthor(e)
+impl From<(multikey::DecodeLegacyError, usize)> for DecodeJsonError {
+    fn from((e, pos): (multikey::DecodeLegacyError, usize)) -> DecodeJsonError {
+        DecodeJsonError {
+            code: ErrorCode::InvalidAuthor(e),
+            position: pos,
+        }
     }
 }
 
-impl From<multibox::DecodeLegacyError> for DecodeJsonError {
-    fn from(e: multibox::DecodeLegacyError) -> DecodeJsonError {
-        DecodeJsonError::InvalidPrivateContent(e)
+impl From<(multibox::DecodeLegacyError, usize)> for DecodeJsonError {
+    fn from((e, pos): (multibox::DecodeLegacyError, usize)) -> DecodeJsonError {
+        DecodeJsonError {
+            code: ErrorCode::InvalidPrivateContent(e),
+            position: pos,
+        }
     }
 }
 
-impl From<DecodeSignatureError> for DecodeJsonError {
-    fn from(e: DecodeSignatureError) -> DecodeJsonError {
-        DecodeJsonError::InvalidSignature(e)
+impl From<(DecodeSignatureError, usize)> for DecodeJsonError {
+    fn from((e, pos): (DecodeSignatureError, usize)) -> DecodeJsonError {
+        DecodeJsonError {
+            code: ErrorCode::InvalidSignature(e),
+            position: pos,
+        }
     }
 }
 
@@ -82,21 +105,19 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
 
     let previous: Option<Multihash>;
 
-    dec.expect_ws(0x7B, DecodeJsonError::Syntax)?; // `{`
-    dec.key("previous", DecodeJsonError::ExpectedPrevious)?;
+    dec.expect_ws(0x7B, ErrorCode::Syntax)?; // `{`
+    dec.key("previous", ErrorCode::ExpectedPrevious)?;
 
     match dec.peek_ws()? {
         0x6E => {
             // `n`
-            dec.expect_bytes(b"null", DecodeJsonError::ExpectedNull)?;
+            dec.expect_bytes(b"null", ErrorCode::ExpectedNull)?;
             previous = None;
         }
         _ => {
-            dec.expect(0x22, DecodeJsonError::ExpectedPrevious)?;
-            let (tmp, tail) = Multihash::from_legacy(dec.input)?;
-            dec.input = tail;
-            previous = Some(tmp);
-            dec.expect(0x22, DecodeJsonError::Syntax)?;
+            dec.expect(0x22, ErrorCode::ExpectedPrevious)?;
+            previous = Some(dec.parse_chunk(Multihash::from_legacy)?);
+            dec.expect(0x22, ErrorCode::Syntax)?;
         }
     }
 
@@ -104,23 +125,23 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
     let sequence: u64;
     let swapped: bool;
 
-    dec.expect_ws(0x2C, DecodeJsonError::Syntax)?; // `,`
-    dec.expect_ws(0x22, DecodeJsonError::Syntax)?; // `"`
+    dec.expect_ws(0x2C, ErrorCode::Syntax)?; // `,`
+    dec.expect_ws(0x22, ErrorCode::Syntax)?; // `"`
     match dec.peek()? {
         0x61 => {
             // `a`
-            dec.expect_bytes(b"author\"", DecodeJsonError::ExpectedAuthor)?;
-            dec.expect_ws(0x3A, DecodeJsonError::Syntax)?; // `:`
-            dec.expect_ws(0x22, DecodeJsonError::Syntax)?;
-            let (tmp, tail) = Multikey::from_legacy(dec.input)?;
-            dec.input = tail;
-            author = tmp;
-            dec.expect(0x22, DecodeJsonError::Syntax)?; // `"`
+            dec.expect_bytes(b"author\"", ErrorCode::ExpectedAuthor)?;
+            dec.expect_ws(0x3A, ErrorCode::Syntax)?; // `:`
+            dec.expect_ws(0x22, ErrorCode::Syntax)?;
 
-            dec.entry("sequence", DecodeJsonError::ExpectedSequence)?;
+            author = dec.parse_chunk(Multikey::from_legacy)?;
+            dec.expect(0x22, ErrorCode::Syntax)?; // `"`
+
+            dec.entry("sequence", ErrorCode::ExpectedSequence)?;
+            let pos = dec.position();
             let seq_tmp: f64 = dec.parse_number()?;
             if seq_tmp.is_sign_negative() || seq_tmp > 9007199254740992.0 {
-                return Err(DecodeJsonError::OutOfBoundsSequence);
+                return dec.fail_at_position(ErrorCode::OutOfBoundsSequence, pos);
             } else {
                 sequence = seq_tmp as u64;
             }
@@ -130,64 +151,57 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
 
         0x73 => {
             // `s`
-            dec.expect_bytes(b"sequence\"", DecodeJsonError::ExpectedSequence)?;
-            dec.expect_ws(0x3A, DecodeJsonError::Syntax)?; // `:`
+            dec.expect_bytes(b"sequence\"", ErrorCode::ExpectedSequence)?;
+            dec.expect_ws(0x3A, ErrorCode::Syntax)?; // `:`
             let _ = dec.peek_ws()?;
+            let pos = dec.position();
             let seq_tmp: f64 = dec.parse_number()?;
             if seq_tmp.is_sign_negative() || seq_tmp > 9007199254740992.0 {
-                return Err(DecodeJsonError::OutOfBoundsSequence);
+                return dec.fail_at_position(ErrorCode::OutOfBoundsSequence, pos);
             } else {
                 sequence = seq_tmp as u64;
             }
 
-            dec.entry("author", DecodeJsonError::ExpectedAuthor)?;
-            dec.expect(0x22, DecodeJsonError::Syntax)?;
-            let (tmp, tail) = Multikey::from_legacy(dec.input)?;
-            dec.input = tail;
-            author = tmp;
-            dec.expect(0x22, DecodeJsonError::Syntax)?; // `"`
+            dec.entry("author", ErrorCode::ExpectedAuthor)?;
+            dec.expect(0x22, ErrorCode::Syntax)?;
+            author = dec.parse_chunk(Multikey::from_legacy)?;
+            dec.expect(0x22, ErrorCode::Syntax)?; // `"`
 
             swapped = true;
         }
 
-        _ => return Err(DecodeJsonError::ExpectedAuthorOrSequence),
+        _ => return dec.fail(ErrorCode::ExpectedAuthorOrSequence),
     }
 
-    dec.entry("timestamp", DecodeJsonError::ExpectedTimestamp)?;
+    dec.entry("timestamp", ErrorCode::ExpectedTimestamp)?;
     let timestamp = unsafe { LegacyF64::from_f64_unchecked(dec.parse_number()?) };
 
-    dec.entry("hash", DecodeJsonError::ExpectedHash)?;
-    dec.expect_bytes(b"\"sha256\"", DecodeJsonError::InvalidHash)?;
+    dec.entry("hash", ErrorCode::ExpectedHash)?;
+    dec.expect_bytes(b"\"sha256\"", ErrorCode::InvalidHash)?;
 
     let content: Content<T>;
-    dec.entry("content", DecodeJsonError::ExpectedContent)?;
+    dec.entry("content", ErrorCode::ExpectedContent)?;
 
     match dec.peek_ws()? {
         0x22 => {
             // `"`
             dec.advance(1);
-            let (tmp, tail) = Multibox::from_legacy(dec.input)?;
-            dec.input = tail;
-            content = Content::Encrypted(tmp);
-            dec.expect(0x22, DecodeJsonError::Syntax)?; // `"`
+            content = Content::Encrypted(dec.parse_chunk(Multibox::from_legacy)?);
+            dec.expect(0x22, ErrorCode::Syntax)?; // `"`
         }
 
         _ => {
-            let (tmp, remaining_input) = json::from_slice_partial(dec.input)?;
-            dec.input = remaining_input;
-            content = Content::Plain(tmp);
+            content = Content::Plain(dec.parse_chunk(json::from_slice_partial)?);
         }
     }
 
     let signature;
-    dec.entry("signature", DecodeJsonError::ExpectedSignature)?;
-    dec.expect(0x22, DecodeJsonError::Syntax)?;
-    let (tmp_sig, tail) = author.sig_from_legacy(dec.input)?;
-    dec.input = tail;
-    signature = tmp_sig;
-    dec.expect(0x22, DecodeJsonError::Syntax)?; // `"`
+    dec.entry("signature", ErrorCode::ExpectedSignature)?;
+    dec.expect(0x22, ErrorCode::Syntax)?;
+    signature = dec.parse_chunk(|s| author.sig_from_legacy(s))?;
+    dec.expect(0x22, ErrorCode::Syntax)?; // `"`
 
-    dec.expect_ws(0x7D, DecodeJsonError::Syntax)?; // `}`
+    dec.expect_ws(0x7D, ErrorCode::Syntax)?; // `}`
     dec.skip(is_ws);
 
     Ok((Message {
@@ -199,12 +213,13 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
             swapped,
             signature,
         },
-        dec.input))
+        dec.rest()))
 }
 
 // A structure that deserializes json encoded legacy messages.
 struct MsgJsonDes<'de> {
     input: &'de [u8],
+    position: usize,
 }
 
 fn is_ws(byte: u8) -> bool {
@@ -217,53 +232,95 @@ fn is_digit(byte: u8) -> bool {
 impl<'de> MsgJsonDes<'de> {
     // Creates a `MsgJsonDes` from a `&[u8]`.
     fn from_slice(input: &'de [u8]) -> Self {
-        MsgJsonDes { input }
+        MsgJsonDes { input, position: 0 }
+    }
+
+    fn position(&self) -> usize {
+        self.position
+    }
+
+    fn slice<I: SliceIndex<[u8]>>(&self, i: I) -> &'de I::Output {
+        &self.input[i]
+    }
+
+    pub fn rest(&self) -> &'de [u8] {
+        self.slice(self.position..)
+    }
+
+    fn fail<T>(&self, code: ErrorCode) -> Result<T, DecodeJsonError> {
+        Err(DecodeJsonError {
+            code,
+            position: self.position(),
+        })
+    }
+
+
+    fn fail_at_position<T>(&self, code: ErrorCode, position: usize) -> Result<T, DecodeJsonError> {
+        Err(DecodeJsonError {
+            code,
+            position
+        })
+    }
+
+    fn parse_chunk<T, E, F>(&mut self, f: F) -> Result<T, (E, usize)>
+    where
+        // DecodeJsonError: From<E>,
+        F: Fn(&[u8]) -> Result<(T, &[u8]), E>
+    {
+        let start = self.position;
+        let remaining = self.rest();
+        let (x, tail) = f(remaining).map_err(|e| (e, start))?;
+        self.advance(remaining.len() - tail.len());
+
+        Ok(x)
     }
 
     // Advance the input slice by some number of bytes.
     fn advance(&mut self, offset: usize) {
-        self.input = &self.input[offset..];
+        self.position += offset;
     }
 
     // Consumes the next byte and returns it.
     fn next(&mut self) -> Result<u8, DecodeJsonError> {
-        match self.input.split_first() {
-            Some((head, tail)) => {
-                self.input = tail;
-                Ok(*head)
-            }
-            None => Err(DecodeJsonError::UnexpectedEndOfInput),
+        if let Some(c) = self.input.get(self.position) {
+            self.advance(1);
+            Ok(*c)
+        } else {
+            self.fail(ErrorCode::UnexpectedEndOfInput)
         }
     }
 
     // Consumes the expected byte, gives the given error if it is something else
-    fn expect(&mut self, expected: u8, err: DecodeJsonError) -> Result<(), DecodeJsonError> {
+    fn expect(&mut self, expected: u8, err: ErrorCode) -> Result<(), DecodeJsonError> {
+        let pos = self.position();
         if self.next()? == expected {
             Ok(())
         } else {
-            Err(err)
+            self.fail_at_position(err, pos)
         }
     }
 
     // Same as expect, but using a predicate.
     fn expect_pred(&mut self,
                    pred: fn(u8) -> bool,
-                   err: DecodeJsonError)
+                   err: ErrorCode)
                    -> Result<(), DecodeJsonError> {
-        if pred(self.next()?) { Ok(()) } else { Err(err) }
+        let pos = self.position();
+        if pred(self.next()?) { Ok(()) } else { self.fail_at_position(err, pos) }
     }
 
     // Returns the next byte without consuming it.
     fn peek(&self) -> Result<u8, DecodeJsonError> {
-        match self.input.first() {
-            Some(byte) => Ok(*byte),
-            None => Err(DecodeJsonError::UnexpectedEndOfInput),
+        if let Some(c) = self.input.get(self.position) {
+            Ok(*c)
+        } else {
+            self.fail(ErrorCode::UnexpectedEndOfInput)
         }
     }
 
     // Returns the next byte without consuming it, or signals end of input as `None`.
     fn peek_or_end(&self) -> Option<u8> {
-        self.input.first().map(|b| *b)
+        self.input.get(self.position).map(|b| *b)
     }
 
     // Skips values while the predicate returns true.
@@ -292,21 +349,21 @@ impl<'de> MsgJsonDes<'de> {
         self.peek()
     }
 
-    fn expect_ws(&mut self, exp: u8, err: DecodeJsonError) -> Result<(), DecodeJsonError> {
+    fn expect_ws(&mut self, exp: u8, err: ErrorCode) -> Result<(), DecodeJsonError> {
         self.skip_ws();
         self.expect(exp, err)
     }
 
-    fn expect_bytes(&mut self, exp: &[u8], err: DecodeJsonError) -> Result<(), DecodeJsonError> {
-        if self.input.starts_with(exp) {
-            self.input = &self.input[exp.len()..];
+    fn expect_bytes(&mut self, exp: &[u8], err: ErrorCode) -> Result<(), DecodeJsonError> {
+        if self.rest().starts_with(exp) {
+            self.advance(exp.len());
             Ok(())
         } else {
-            Err(err)
+            self.fail(err)
         }
     }
 
-    fn key(&mut self, key: &str, err: DecodeJsonError) -> Result<(), DecodeJsonError> {
+    fn key(&mut self, key: &str, err: ErrorCode) -> Result<(), DecodeJsonError> {
         self.expect_ws(0x22, err.clone())?;
         self.expect_bytes(key.as_bytes(), err.clone())?;
         self.expect_ws(0x22, err.clone())?;
@@ -314,23 +371,23 @@ impl<'de> MsgJsonDes<'de> {
         Ok(self.skip_ws())
     }
 
-    fn comma(&mut self, err: DecodeJsonError) -> Result<(), DecodeJsonError> {
+    fn comma(&mut self, err: ErrorCode) -> Result<(), DecodeJsonError> {
         self.expect_ws(0x2C, err)
     }
 
-    fn entry(&mut self, key: &str, err: DecodeJsonError) -> Result<(), DecodeJsonError> {
+    fn entry(&mut self, key: &str, err: ErrorCode) -> Result<(), DecodeJsonError> {
         self.comma(err.clone())?;
         self.key(key, err)
     }
 
     fn parse_number(&mut self) -> Result<f64, DecodeJsonError> {
-        let original_input = self.input;
+        let start = self.position;
 
         // trailing `-`
         match self.peek() {
             Ok(0x2D) => self.advance(1),
             Ok(_) => {}
-            Err(_) => return Err(DecodeJsonError::ExpectedNumber),
+            Err(_) => return self.fail_at_position(ErrorCode::ExpectedNumber, start),
         }
 
         let next = self.next()?;
@@ -339,13 +396,13 @@ impl<'de> MsgJsonDes<'de> {
             0x30 => {}
             // first digit nonzero, may be followed by more digits until the `.`
             0x31...0x39 => self.skip(is_digit),
-            _ => return Err(DecodeJsonError::ExpectedNumber),
+            _ => return self.fail_at_position(ErrorCode::ExpectedNumber, start),
         }
 
         // `.`, followed by many1 digits
         if let Some(0x2E) = self.peek_or_end() {
             self.advance(1);
-            self.expect_pred(is_digit, DecodeJsonError::Digit)?;
+            self.expect_pred(is_digit, ErrorCode::Digit)?;
             self.skip(is_digit);
         }
 
@@ -360,7 +417,7 @@ impl<'de> MsgJsonDes<'de> {
                 }
 
                 // many1 digits
-                self.expect_pred(is_digit, DecodeJsonError::Digit)?;
+                self.expect_pred(is_digit, ErrorCode::Digit)?;
                 self.skip(is_digit);
             }
             _ => {}
@@ -368,14 +425,13 @@ impl<'de> MsgJsonDes<'de> {
 
         // done parsing the number, convert it to a rust value
         let f = strtod(unsafe {
-                         std::str::from_utf8_unchecked(&original_input[..(original_input.len() -
-                                                           self.input.len())])
+                         std::str::from_utf8_unchecked(self.slice(start..self.position))
                      }).unwrap(); // We already checked that the input is a valid number
 
         if LegacyF64::is_valid(f) {
             Ok(f)
         } else {
-            Err(DecodeJsonError::InvalidNumber)
+            self.fail_at_position(ErrorCode::InvalidNumber, start)
         }
     }
 }
