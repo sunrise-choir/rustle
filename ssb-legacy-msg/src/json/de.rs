@@ -1,18 +1,16 @@
-use std::slice::SliceIndex;
 use serde::de::DeserializeOwned;
+use std::slice::SliceIndex;
 use strtod::strtod;
 
-use ssb_legacy_msg_data::{
-    LegacyF64,
-};
-use ssb_multiformats::{
-    multihash::{Multihash, self},
-    multikey::{Multikey, self, DecodeSignatureError},
-    multibox::{Multibox, self}
-};
 use ssb_legacy_msg_data::json;
+use ssb_legacy_msg_data::LegacyF64;
+use ssb_multiformats::{
+    multibox::{self, Multibox},
+    multihash::{self, Multihash},
+    multikey::{self, DecodeSignatureError, Multikey},
+};
 
-use super::super::{Message, Content};
+use super::super::{Content, Message};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct DecodeJsonError {
@@ -56,7 +54,7 @@ impl From<(json::DecodeJsonError, usize)> for DecodeJsonError {
     fn from((e, pos): (json::DecodeJsonError, usize)) -> DecodeJsonError {
         DecodeJsonError {
             code: ErrorCode::Content(e.code),
-            position: pos + e.position
+            position: pos + e.position,
         }
     }
 }
@@ -99,7 +97,8 @@ impl From<(DecodeSignatureError, usize)> for DecodeJsonError {
 
 /// Try to parse data from the input, returning the remaining input when done.
 pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), DecodeJsonError>
-    where T: DeserializeOwned
+where
+    T: DeserializeOwned,
 {
     let mut dec = MsgJsonDes::from_slice(input);
 
@@ -204,7 +203,8 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
     dec.expect_ws(0x7D, ErrorCode::Syntax)?; // `}`
     dec.skip(is_ws);
 
-    Ok((Message {
+    Ok((
+        Message {
             previous,
             author,
             sequence,
@@ -213,7 +213,8 @@ pub fn from_legacy<'de, T>(input: &'de [u8]) -> Result<(Message<T>, &'de [u8]), 
             swapped,
             signature,
         },
-        dec.rest()))
+        dec.rest(),
+    ))
 }
 
 // A structure that deserializes json encoded legacy messages.
@@ -254,18 +255,14 @@ impl<'de> MsgJsonDes<'de> {
         })
     }
 
-
     fn fail_at_position<T>(&self, code: ErrorCode, position: usize) -> Result<T, DecodeJsonError> {
-        Err(DecodeJsonError {
-            code,
-            position
-        })
+        Err(DecodeJsonError { code, position })
     }
 
     fn parse_chunk<T, E, F>(&mut self, f: F) -> Result<T, (E, usize)>
     where
         // DecodeJsonError: From<E>,
-        F: Fn(&[u8]) -> Result<(T, &[u8]), E>
+        F: Fn(&[u8]) -> Result<(T, &[u8]), E>,
     {
         let start = self.position;
         let remaining = self.rest();
@@ -301,12 +298,13 @@ impl<'de> MsgJsonDes<'de> {
     }
 
     // Same as expect, but using a predicate.
-    fn expect_pred(&mut self,
-                   pred: fn(u8) -> bool,
-                   err: ErrorCode)
-                   -> Result<(), DecodeJsonError> {
+    fn expect_pred(&mut self, pred: fn(u8) -> bool, err: ErrorCode) -> Result<(), DecodeJsonError> {
         let pos = self.position();
-        if pred(self.next()?) { Ok(()) } else { self.fail_at_position(err, pos) }
+        if pred(self.next()?) {
+            Ok(())
+        } else {
+            self.fail_at_position(err, pos)
+        }
     }
 
     // Returns the next byte without consuming it.
@@ -424,9 +422,8 @@ impl<'de> MsgJsonDes<'de> {
         }
 
         // done parsing the number, convert it to a rust value
-        let f = strtod(unsafe {
-                         std::str::from_utf8_unchecked(self.slice(start..self.position))
-                     }).unwrap(); // We already checked that the input is a valid number
+        let f = strtod(unsafe { std::str::from_utf8_unchecked(self.slice(start..self.position)) })
+            .unwrap(); // We already checked that the input is a valid number
 
         if LegacyF64::is_valid(f) {
             Ok(f)
