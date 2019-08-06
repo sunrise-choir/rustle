@@ -1,14 +1,14 @@
 extern crate crypto_hash;
 extern crate serde;
-extern crate strtod;
 extern crate ssb_legacy_msg_data;
 extern crate ssb_multiformats;
+extern crate strtod;
 
 use ssb_legacy_msg_data::LegacyF64;
 use ssb_multiformats::{
+    multibox::Multibox,
     multihash::Multihash,
     multikey::{Multikey, Multisig},
-    multibox::Multibox,
 };
 
 pub mod json;
@@ -46,9 +46,10 @@ impl<T> Message<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::read_to_string;
-    use ssb_legacy_msg_data::{value::Value};
     use super::*;
+    use serde::{Deserialize, Serialize};
+    use ssb_legacy_msg_data::value::Value;
+    use std::fs::read_to_string;
 
     #[test]
     fn parse() {
@@ -65,5 +66,35 @@ mod tests {
         // TODO: struct SigningEncoding
         // let reencoded = json::to_legacy_vec(&msg, false).unwrap();
         // assert_eq!(&s.as_bytes(), &reencoded.as_slice());
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Post {
+        text: String,
+        mentions: Vec<String>, //TODO: not String, MultiWhatever
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    #[serde(tag = "type")] //
+    pub enum MessageContent {
+        #[serde(rename = "post")]
+        Post(Post),
+    }
+
+    #[test]
+    fn round_trip_a_post_message() {
+        let s = read_to_string("./test-data/alice/post-valid.json").unwrap();
+        dbg!(&s);
+
+        let (msg, _rest) = json::from_legacy::<MessageContent>(&s.as_bytes()).unwrap();
+        let sign_json = json::to_legacy_vec(&msg, false).unwrap();
+        let (msg, _rest) = json::from_legacy::<MessageContent>(&sign_json).unwrap();
+
+        eprintln!("msg: {:?}", msg);
+
+        match msg.content {
+            Content::Plain(MessageContent::Post(msg)) => assert_eq!(msg.text, "Bob?"),
+            _ => panic!(),
+        }
     }
 }
