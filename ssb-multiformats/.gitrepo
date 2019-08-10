@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:sunrise-choir/ssb-multiformats.git
 	branch = master
-	commit = 04699596602900725d54d52fa5c54bbf2c4fcb07
+	commit = 6ddcf582bd41dcf7755419a6c48061643efe15b1
 	parent = f5ceaa938540909e0b65e69e7b295839d9a4e979
 	method = merge
 	cmdver = 0.4.0
