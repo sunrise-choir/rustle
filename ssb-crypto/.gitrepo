@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:sunrise-choir/ssb-crypto.git
+	branch = master
+	commit = 6bd4f4fab32712c74a773b5704ecbe50e6d3dbeb
+	parent = 7d63d580b04c619372ff97c3923c3f835601dacb
+	method = merge
+	cmdver = 0.4.0
