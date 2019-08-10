@@ -393,7 +393,7 @@ impl<'de> MsgJsonDes<'de> {
             // first digit `0` must be followed by `.`
             0x30 => {}
             // first digit nonzero, may be followed by more digits until the `.`
-            0x31...0x39 => self.skip(is_digit),
+            0x31..=0x39 => self.skip(is_digit),
             _ => return self.fail_at_position(ErrorCode::ExpectedNumber, start),
         }
 

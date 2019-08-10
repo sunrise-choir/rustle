@@ -317,7 +317,7 @@ fn is_int_str(s: &str) -> bool {
     }
 
     match s.as_bytes().split_first() {
-        Some((0x31...0x39, tail)) => {
+        Some((0x31..=0x39, tail)) => {
             if tail.iter().all(|byte| *byte >= 0x30 && *byte <= 0x39) {
                 if tail.len() >= 10 {
                     return false;
