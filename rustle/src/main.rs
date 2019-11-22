@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 #![allow(unused_imports)]
 
 use std::io::{self, BufRead, BufReader, Read};
@@ -15,6 +13,7 @@ use flumedb::flume_log::{self, FlumeLog};
 use flumedb::offset_log::{BidirIterator, OffsetLog, LogEntry};
 
 use futures::StreamExt;
+use futures::channel::mpsc::Receiver;
 use futures::executor::{self, block_on, LocalPool, ThreadPool};
 use futures::future::join;
 use futures::task::LocalSpawnExt;
@@ -23,7 +22,7 @@ use futures::prelude::*;
 use futures::sink::SinkExt;
 
 use futures::task::{SpawnExt};
-use romio::{TcpListener, TcpStream};
+use async_std::net::{TcpListener, TcpStream};
 
 #[macro_use] extern crate serde_json;
 #[macro_use] extern crate serde_derive;
@@ -33,7 +32,7 @@ use serde_json::json;
 use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_handshake::client;
 use ssb_boxstream::BoxStream;
-use ssb_packetstream::{mux, Packet, BodyType};
+use ssb_packetstream::{mux, ChildError, MuxChildSender, Packet, BodyType};
 use snafu::{ResultExt, Snafu};
 use uuid::Uuid;
 
@@ -47,7 +46,7 @@ pub enum Error {
     TcpConnection { source: std::io::Error },
 
     #[snafu(display("Mux error: {}", source))]
-    Mux { source: mux::SubError },
+    Mux { source: ChildError },
 
     #[snafu(display("Flume error: {}", source))]
     FlumeIo { source: std::io::Error },
@@ -93,7 +92,7 @@ fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
     Ok((p, s))
 }
 
-async fn bumrpc(p: Packet, _out: mux::SubSender, _inn: Option<mux::SubReceiver>)
+async fn bumrpc(p: Packet, _out: MuxChildSender, _inn: Option<Receiver<Packet>>)
                 -> Result<(), Error> {
     log_packet(&p);
     Ok(())
@@ -213,7 +212,7 @@ fn main() -> Result<(), Error> {
 
             let server_pk = PublicKey::from_slice(&base64::decode(peer_key).unwrap()).unwrap();
             let (box_r, box_w) = block_on(async {
-                let mut tcp = TcpStream::connect(&peer_addr.parse().unwrap()).await.context(TcpConnection)?;
+                let mut tcp = TcpStream::connect(&peer_addr).await.context(TcpConnection)?;
                 let o = client(&mut tcp, net_id, pk, sk, server_pk).await.unwrap();
 
                 let (tcp_r, tcp_w) = tcp.split();
@@ -222,9 +221,9 @@ fn main() -> Result<(), Error> {
             eprintln!("client connected");
 
             let mut pool = LocalPool::new();
-            let mut spawner = pool.spawner();
+            let spawner = pool.spawner();
 
-            let (mut out, done) = mux::mux(box_r, box_w, bumrpc);
+            let (mut out, done) = mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             let msg = create_hist_stream_msg(feed_id, feed_seq, feed_limit);

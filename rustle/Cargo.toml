@@ -7,16 +7,16 @@ edition = "2018"
 [dependencies]
 base64 = "0.10"
 clap = "~2.32.0"
-futures-preview = "0.3.0-alpha.16"
+futures = { version = "0.3.1", features = ["thread-pool"] }
 flumedb = { git = "https://github.com/sunrise-choir/flumedb-rs" }
 hex = "0.3"
-romio = "0.3.0-alpha.8"
 serde = "~1.0.90"
 serde_derive = "~1.0.90"
 serde_json = "~1.0.39"
-snafu = { version = "0.4.1", features = ["unstable-futures"] }
+snafu = { version = "0.6.0", features = ["futures"] }
 ssb-crypto = "~0.1.3"
-ssb-handshake = "0.4.0"
-ssb-boxstream = "0.1.0"
+ssb-handshake = "0.5.0"
+ssb-boxstream = "0.2.0"
 ssb-packetstream = { version = "0.1.0", path = "../ssb-packetstream" }
 uuid = { version = "0.7", features = ["v4"] }
+async-std = "1.1.0"
