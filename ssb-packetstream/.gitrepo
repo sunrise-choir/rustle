@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:sunrise-choir/ssb-packetstream.git
+	branch = master
+	commit = 0280fae24c14cc5a4754a73b5cadd77fc398b160
+	parent = 53b53df40dad74d58d6e6869e4bf058fb64999b4
+	method = merge
+	cmdver = 0.4.0
