@@ -300,6 +300,10 @@ fn main() -> Result<(), Error> {
 
             let r = async move {
                 let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
+
+                // We're potentially collecting an entire feed here. My ~6000 message feed is ~4mb
+                // so it's not a huge deal. Later it could be good to `batch` chunks up for
+                // verification + validation and appending to the db. 
                 let packets = a_in.map(|p| p.body).collect::<Vec<_>>().await;
 
                 if packets.len() > 0 {
@@ -308,7 +312,9 @@ fn main() -> Result<(), Error> {
                     let previous: Option<Vec<u8>> =
                         db.get_entry_by_seq(&author, latest_seq).unwrap();
 
-                    //TODO add to the api of ssb-db
+                    // Later, we should add stuff to store into about broken feeds in the db.
+                    // We should store why they broke and even store the offending message.
+                    // Then we can do a avoid trying to replicate broken feeds over and over. 
                     par_validate_message_hash_chain_of_feed(&packets, previous.as_ref()).unwrap();
                     eprintln!("validated messages");
 
