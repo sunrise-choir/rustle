@@ -271,11 +271,6 @@ fn main() -> Result<(), Error> {
 
             let net_id = NetworkKey::SSB_MAIN_NET;
 
-            // ./rustle --secret-file ~/.testnet/secret getfeed --feed "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519" --addr "134.209.164.64:8008" --key "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84="
-
-            // let key = "U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=";
-            // let addr = "127.0.0.1:8008";
-
             let server_pk = PublicKey::from_slice(&base64::decode(peer_key).unwrap()).unwrap();
             let (box_r, box_w) = block_on(async {
                 let mut tcp = TcpStream::connect(&peer_addr)
