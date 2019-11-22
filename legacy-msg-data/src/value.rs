@@ -2,16 +2,16 @@
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, btree_map};
+use std::collections::{btree_map, BTreeMap};
 use std::fmt;
 
-use indexmap::{IndexMap, map};
+use indexmap::{map, IndexMap};
 use serde::{
-    ser::{Serialize, Serializer, SerializeSeq, SerializeMap},
-    de::{Deserialize, Deserializer, Visitor, SeqAccess, MapAccess, Error},
+    de::{Deserialize, Deserializer, Error, MapAccess, SeqAccess, Visitor},
+    ser::{Serialize, SerializeMap, SerializeSeq, Serializer},
 };
 
-use super::{LegacyF64, legacy_length};
+use super::{legacy_length, LegacyF64};
 
 // The maximum capacity of entries to preallocate for arrays and objects. Even if malicious input
 // claims to contain a much larger collection, only this much memory will be blindly allocated.
@@ -51,7 +51,7 @@ impl Serialize for Value {
                     s.serialize_element(inner)?;
                 }
                 s.end()
-            },
+            }
             Value::Object(ref m) => {
                 let mut s = serializer.serialize_map(Some(m.len()))?;
                 for (key, value) in m {
@@ -88,7 +88,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
     fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
         match LegacyF64::from_f64(v) {
             Some(f) => Ok(Value::Float(f)),
-            None => Err(E::custom("invalid float"))
+            None => Err(E::custom("invalid float")),
         }
     }
 
@@ -104,7 +104,10 @@ impl<'de> Visitor<'de> for ValueVisitor {
         Ok(Value::Null)
     }
 
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
         // use the size hint, but put a maximum to the allocation because we can't trust the input
         let mut v = Vec::with_capacity(std::cmp::min(seq.size_hint().unwrap_or(0), MAX_ALLOC));
 
@@ -115,10 +118,15 @@ impl<'de> Visitor<'de> for ValueVisitor {
         Ok(Value::Array(v))
     }
 
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error> where A: MapAccess<'de> {
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
         // use the size hint, but put a maximum to the allocation because we can't trust the input
-        let mut m = RidiculousStringMap::with_capacity(std::cmp::min(map.size_hint().unwrap_or(0),
-                                                         MAX_ALLOC));
+        let mut m = RidiculousStringMap::with_capacity(std::cmp::min(
+            map.size_hint().unwrap_or(0),
+            MAX_ALLOC,
+        ));
 
         while let Some((key, val)) = map.next_entry()? {
             if let Some(_) = m.insert(key, val) {
@@ -178,7 +186,7 @@ impl<'de> Visitor<'de> for ContentValueVisitor {
     fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
         match LegacyF64::from_f64(v) {
             Some(f) => Ok(ContentValue(Value::Float(f))),
-            None => Err(E::custom("invalid float"))
+            None => Err(E::custom("invalid float")),
         }
     }
 
@@ -194,7 +202,10 @@ impl<'de> Visitor<'de> for ContentValueVisitor {
         Ok(ContentValue(Value::Null))
     }
 
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
         // use the size hint, but put a maximum to the allocation because we can't trust the input
         let mut v = Vec::with_capacity(std::cmp::min(seq.size_hint().unwrap_or(0), MAX_ALLOC));
 
@@ -205,10 +216,15 @@ impl<'de> Visitor<'de> for ContentValueVisitor {
         Ok(ContentValue(Value::Array(v)))
     }
 
-    fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error> where A: MapAccess<'de> {
+    fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
         // use the size hint, but put a maximum to the allocation because we can't trust the input
-        let mut m = RidiculousStringMap::with_capacity(std::cmp::min(map.size_hint().unwrap_or(0),
-                                                         MAX_ALLOC));
+        let mut m = RidiculousStringMap::with_capacity(std::cmp::min(
+            map.size_hint().unwrap_or(0),
+            MAX_ALLOC,
+        ));
 
         while let Some((key, val)) = map.next_entry::<String, Value>()? {
             if self.0 && key == "type" {
@@ -220,9 +236,8 @@ impl<'de> Visitor<'de> for ContentValueVisitor {
                             return Err(A::Error::custom("content had invalid type"));
                         }
                     }
-                    _ => return Err(A::Error::custom("content type must be a string"))
+                    _ => return Err(A::Error::custom("content type must be a string")),
                 }
-
             }
 
             if let Some(_) = m.insert(key, val) {
@@ -239,7 +254,7 @@ impl<'de> Visitor<'de> for ContentValueVisitor {
 }
 
 /// Check whether the given string is a valid `type` value of a content object.
-fn check_type_value(s: &str) -> bool{
+fn check_type_value(s: &str) -> bool {
     let len = legacy_length(s);
 
     if len < 3 || len > 53 {
@@ -297,12 +312,15 @@ impl<V> RidiculousStringMap<V> {
     /// in ascending order, and then the remaining entries in the same order in
     /// which they were inserted.
     pub fn iter(&self) -> Iter<V> {
-        Iter { naturals: self.naturals.iter(), others: self.others.iter(), nats: true }
+        Iter {
+            naturals: self.naturals.iter(),
+            others: self.others.iter(),
+            nats: true,
+        }
     }
 
     /// Returns a reference to the value corresponding to the key.
-    pub fn get(&self, key: &str) -> Option<&V>
-    {
+    pub fn get(&self, key: &str) -> Option<&V> {
         if is_int_str(key) {
             self.naturals.get(key)
         } else {
@@ -328,9 +346,7 @@ fn is_int_str(s: &str) -> bool {
                 false
             }
         }
-        _ => {
-            false
-        },
+        _ => false,
     }
 }
 

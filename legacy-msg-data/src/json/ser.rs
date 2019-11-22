@@ -1,12 +1,13 @@
 use std::{error, fmt, io};
 
-use serde::ser::{self, Serializer, Serialize, SerializeSeq, SerializeStructVariant,
-                 SerializeStruct, SerializeMap, SerializeTupleVariant, SerializeTupleStruct,
-                 SerializeTuple};
-use ryu_ecmascript;
 use base64;
+use ryu_ecmascript;
+use serde::ser::{
+    self, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant,
+    SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, Serializer,
+};
 
-use super::super::{LegacyF64, is_i64_valid, is_u64_valid};
+use super::super::{is_i64_valid, is_u64_valid, LegacyF64};
 
 /// Everything that can go wrong during json serialization.
 #[derive(Debug)]
@@ -58,7 +59,8 @@ pub struct JsonSerializer<W> {
 }
 
 impl<W> JsonSerializer<W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     /// Creates a new serializer.
     ///
@@ -126,25 +128,29 @@ impl<W> JsonSerializer<W>
 }
 
 /// Serialize the given data structure as JSON into the IO stream.
-pub fn to_writer<W, T: ?Sized>(writer: &mut W,
-                               value: &T,
-                               compact: bool)
-                               -> Result<(), EncodeJsonError>
-    where W: io::Write,
-          T: Serialize
+pub fn to_writer<W, T: ?Sized>(
+    writer: &mut W,
+    value: &T,
+    compact: bool,
+) -> Result<(), EncodeJsonError>
+where
+    W: io::Write,
+    T: Serialize,
 {
     let mut ser = JsonSerializer::new(writer, compact, 0);
     value.serialize(&mut ser)
 }
 
 /// Serialize the given data structure as JSON into the IO stream.
-pub fn to_writer_indent<W, T: ?Sized>(writer: &mut W,
-                                      value: &T,
-                                      compact: bool,
-                                      indent: usize)
-                                      -> Result<(), EncodeJsonError>
-    where W: io::Write,
-          T: Serialize
+pub fn to_writer_indent<W, T: ?Sized>(
+    writer: &mut W,
+    value: &T,
+    compact: bool,
+    indent: usize,
+) -> Result<(), EncodeJsonError>
+where
+    W: io::Write,
+    T: Serialize,
 {
     let mut ser = JsonSerializer::new(writer, compact, indent);
     value.serialize(&mut ser)
@@ -152,7 +158,8 @@ pub fn to_writer_indent<W, T: ?Sized>(writer: &mut W,
 
 /// Serialize the given data structure  as JSON into a JSON byte vector.
 pub fn to_vec<T: ?Sized>(value: &T, compact: bool) -> Result<Vec<u8>, EncodeJsonError>
-    where T: Serialize
+where
+    T: Serialize,
 {
     let mut writer = Vec::with_capacity(128);
     to_writer(&mut writer, value, compact).map(|_| writer)
@@ -160,16 +167,18 @@ pub fn to_vec<T: ?Sized>(value: &T, compact: bool) -> Result<Vec<u8>, EncodeJson
 
 /// Serialize the given data structure as JSON into a `String`.
 pub fn to_string<T: ?Sized>(value: &T, compact: bool) -> Result<String, EncodeJsonError>
-    where T: Serialize
+where
+    T: Serialize,
 {
     to_vec(value, compact).map(|bytes| unsafe {
-                                   // We do not emit invalid UTF-8.
-                                   String::from_utf8_unchecked(bytes)
-                               })
+        // We do not emit invalid UTF-8.
+        String::from_utf8_unchecked(bytes)
+    })
 }
 
 impl<'a, W> Serializer for &'a mut JsonSerializer<W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
@@ -299,9 +308,7 @@ impl<'a, W> Serializer for &'a mut JsonSerializer<W>
             }
         }
 
-        self.writer
-            .write_all(b"\"")
-            .map_err(EncodeJsonError::Io)
+        self.writer.write_all(b"\"").map_err(EncodeJsonError::Io)
     }
 
     // Serializing as base64.
@@ -317,7 +324,8 @@ impl<'a, W> Serializer for &'a mut JsonSerializer<W>
     }
 
     fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         value.serialize(self)
     }
@@ -331,31 +339,36 @@ impl<'a, W> Serializer for &'a mut JsonSerializer<W>
         self.serialize_unit()
     }
 
-    fn serialize_unit_variant(self,
-                              _name: &'static str,
-                              _variant_index: u32,
-                              variant: &'static str)
-                              -> Result<Self::Ok, Self::Error> {
+    fn serialize_unit_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+    ) -> Result<Self::Ok, Self::Error> {
         self.serialize_str(variant)
     }
 
-    fn serialize_newtype_struct<T>(self,
-                                   _name: &'static str,
-                                   value: &T)
-                                   -> Result<Self::Ok, Self::Error>
-        where T: ?Sized + Serialize
+    fn serialize_newtype_struct<T>(
+        self,
+        _name: &'static str,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error>
+    where
+        T: ?Sized + Serialize,
     {
         value.serialize(self)
     }
 
     // https://spec.scuttlebutt.nz/datamodel.html#signing-encoding-objects
-    fn serialize_newtype_variant<T: ?Sized>(self,
-                                            _name: &'static str,
-                                            _variant_index: u32,
-                                            variant: &'static str,
-                                            value: &T)
-                                            -> Result<Self::Ok, Self::Error>
-        where T: Serialize
+    fn serialize_newtype_variant<T: ?Sized>(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error>
+    where
+        T: Serialize,
     {
         self.begin_object()?;
         self.newline()?;
@@ -384,21 +397,23 @@ impl<'a, W> Serializer for &'a mut JsonSerializer<W>
         self.serialize_seq(Some(len))
     }
 
-    fn serialize_tuple_struct(self,
-                              _name: &'static str,
-                              len: usize)
-                              -> Result<Self::SerializeTupleStruct, EncodeJsonError> {
+    fn serialize_tuple_struct(
+        self,
+        _name: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleStruct, EncodeJsonError> {
         self.serialize_seq(Some(len))
     }
 
     // https://spec.scuttlebutt.nz/datamodel.html#signing-encoding-objects
     // https://spec.scuttlebutt.nz/datamodel.html#signing-encoding-arrays
-    fn serialize_tuple_variant(self,
-                               _name: &'static str,
-                               _variant_index: u32,
-                               variant: &'static str,
-                               _len: usize)
-                               -> Result<Self::SerializeTupleVariant, EncodeJsonError> {
+    fn serialize_tuple_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleVariant, EncodeJsonError> {
         self.begin_object()?;
         self.newline()?;
 
@@ -420,20 +435,22 @@ impl<'a, W> Serializer for &'a mut JsonSerializer<W>
         }
     }
 
-    fn serialize_struct(self,
-                        _name: &'static str,
-                        len: usize)
-                        -> Result<Self::SerializeStruct, EncodeJsonError> {
+    fn serialize_struct(
+        self,
+        _name: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeStruct, EncodeJsonError> {
         self.serialize_map(Some(len))
     }
 
     // https://spec.scuttlebutt.nz/datamodel.html#signing-encoding-objects
-    fn serialize_struct_variant(self,
-                                _name: &'static str,
-                                _variant_index: u32,
-                                variant: &'static str,
-                                _len: usize)
-                                -> Result<Self::SerializeStructVariant, EncodeJsonError> {
+    fn serialize_struct_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStructVariant, EncodeJsonError> {
         self.begin_object()?;
         self.newline()?;
 
@@ -489,13 +506,15 @@ impl<'a, W: io::Write> CollectionSerializer<'a, W> {
 }
 
 impl<'a, W> SerializeSeq for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         self.comma()?;
         value.serialize(&mut *self.ser)?;
@@ -509,13 +528,15 @@ impl<'a, W> SerializeSeq for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeTuple for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         SerializeSeq::serialize_element(self, value)
     }
@@ -526,13 +547,15 @@ impl<'a, W> SerializeTuple for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeTupleStruct for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         SerializeSeq::serialize_element(self, value)
     }
@@ -543,13 +566,15 @@ impl<'a, W> SerializeTupleStruct for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeTupleVariant for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         SerializeSeq::serialize_element(self, value)
     }
@@ -562,13 +587,15 @@ impl<'a, W> SerializeTupleVariant for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeMap for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         self.comma()?;
         key.serialize(&mut *self.ser)?;
@@ -577,7 +604,8 @@ impl<'a, W> SerializeMap for CollectionSerializer<'a, W>
     }
 
     fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-        where T: Serialize
+    where
+        T: Serialize,
     {
         value.serialize(&mut *self.ser)?;
         Ok(())
@@ -590,13 +618,15 @@ impl<'a, W> SerializeMap for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeStruct for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), EncodeJsonError>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         SerializeMap::serialize_entry(self, key, value)
     }
@@ -607,13 +637,15 @@ impl<'a, W> SerializeStruct for CollectionSerializer<'a, W>
 }
 
 impl<'a, W> SerializeStructVariant for CollectionSerializer<'a, W>
-    where W: io::Write
+where
+    W: io::Write,
 {
     type Ok = ();
     type Error = EncodeJsonError;
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), EncodeJsonError>
-        where T: ?Sized + Serialize
+    where
+        T: ?Sized + Serialize,
     {
         SerializeMap::serialize_entry(self, key, value)
     }

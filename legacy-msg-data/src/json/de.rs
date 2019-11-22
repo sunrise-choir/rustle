@@ -1,11 +1,13 @@
-use std::{error, fmt};
 use std::slice::SliceIndex;
+use std::{error, fmt};
 
-use serde::de::{self, Deserializer, Deserialize, DeserializeOwned, DeserializeSeed, Visitor,
-                SeqAccess, MapAccess, EnumAccess, VariantAccess, IntoDeserializer};
-use strtod::strtod;
 use base64;
-use encode_unicode::{Utf8Char, Utf16Char, error::InvalidUtf16Tuple};
+use encode_unicode::{error::InvalidUtf16Tuple, Utf16Char, Utf8Char};
+use serde::de::{
+    self, Deserialize, DeserializeOwned, DeserializeSeed, Deserializer, EnumAccess,
+    IntoDeserializer, MapAccess, SeqAccess, VariantAccess, Visitor,
+};
+use strtod::strtod;
 
 use super::super::LegacyF64;
 
@@ -144,16 +146,14 @@ impl<'de> JsonDeserializer<'de> {
     }
 
     fn fail_at_position<T>(&self, code: ErrorCode, position: usize) -> Result<T, DecodeJsonError> {
-        Err(DecodeJsonError {
-            code,
-            position
-        })
+        Err(DecodeJsonError { code, position })
     }
 }
 
 /// Try to parse data from the input. Validates that there are no trailing non-whitespace bytes.
 pub fn from_slice<'de, T>(input: &'de [u8]) -> Result<T, DecodeJsonError>
-    where T: DeserializeOwned
+where
+    T: DeserializeOwned,
 {
     let mut de = JsonDeserializer::from_slice(input);
     match Deserialize::deserialize(&mut de) {
@@ -164,7 +164,8 @@ pub fn from_slice<'de, T>(input: &'de [u8]) -> Result<T, DecodeJsonError>
 
 /// Try to parse data from the input, returning the remaining input when done.
 pub fn from_slice_partial<'de, T>(input: &'de [u8]) -> Result<(T, &'de [u8]), DecodeJsonError>
-    where T: DeserializeOwned
+where
+    T: DeserializeOwned,
 {
     let mut de = JsonDeserializer::from_slice(input);
     match Deserialize::deserialize(&mut de) {
@@ -217,12 +218,13 @@ impl<'de> JsonDeserializer<'de> {
     }
 
     // Same as expect, but using a predicate.
-    fn expect_pred(&mut self,
-                   pred: fn(u8) -> bool,
-                   err: ErrorCode)
-                   -> Result<(), DecodeJsonError> {
+    fn expect_pred(&mut self, pred: fn(u8) -> bool, err: ErrorCode) -> Result<(), DecodeJsonError> {
         let pos = self.position();
-        if pred(self.next()?) { Ok(()) } else { self.fail_at_position(err, pos) }
+        if pred(self.next()?) {
+            Ok(())
+        } else {
+            self.fail_at_position(err, pos)
+        }
     }
 
     // Returns the next byte without consuming it.
@@ -288,22 +290,27 @@ impl<'de> JsonDeserializer<'de> {
             self.expect_pred(is_hex_digit, ErrorCode::HexDigit)?;
         }
 
-        u16::from_str_radix(unsafe { std::str::from_utf8_unchecked(&self.slice(start..start+4)) },
-                            16)
-                .map_err(|_| unreachable!("We already checked for valid input"))
+        u16::from_str_radix(
+            unsafe { std::str::from_utf8_unchecked(&self.slice(start..start + 4)) },
+            16,
+        )
+        .map_err(|_| unreachable!("We already checked for valid input"))
     }
 
     fn parse_bool(&mut self) -> Result<bool, DecodeJsonError> {
         match self.expect_bytes(b"true", ErrorCode::ExpectedBool) {
             Ok(()) => Ok(true),
-            Err(_) => {
-                self.expect_bytes(b"false", ErrorCode::ExpectedBool)
-                    .map(|_| false)
-            }
+            Err(_) => self
+                .expect_bytes(b"false", ErrorCode::ExpectedBool)
+                .map(|_| false),
         }
     }
 
-    fn parse_number_except(&mut self, pred: fn(f64) -> bool, err: ErrorCode) -> Result<f64, DecodeJsonError> {
+    fn parse_number_except(
+        &mut self,
+        pred: fn(f64) -> bool,
+        err: ErrorCode,
+    ) -> Result<f64, DecodeJsonError> {
         let pos = self.position();
         let f = self.parse_number()?;
         if pred(f) {
@@ -357,9 +364,9 @@ impl<'de> JsonDeserializer<'de> {
         }
 
         // done parsing the number, convert it to a rust value
-        let f = strtod(unsafe {
-                         std::str::from_utf8_unchecked(self.slice(start..self.position()))
-                     }).unwrap(); // We already checked that the input is a valid number
+        let f =
+            strtod(unsafe { std::str::from_utf8_unchecked(self.slice(start..self.position())) })
+                .unwrap(); // We already checked that the input is a valid number
 
         if LegacyF64::is_valid(f) {
             Ok(f)
@@ -414,7 +421,8 @@ impl<'de> JsonDeserializer<'de> {
                             let cp = self.parse_unicode_escape()?;
 
                             match code_unit_type(cp) {
-                                CodeUnitType::Valid => decoded.push(unsafe {std::char::from_u32_unchecked(cp as u32)}),
+                                CodeUnitType::Valid => decoded
+                                    .push(unsafe { std::char::from_u32_unchecked(cp as u32) }),
 
                                 CodeUnitType::LeadingSurrogate => {
                                     // the unicode escape was for a leading surrogate, which
@@ -426,11 +434,16 @@ impl<'de> JsonDeserializer<'de> {
 
                                     match Utf16Char::from_tuple((cp, Some(cp2))) {
                                         Ok(c) => decoded.push(c.into()),
-                                        Err(e) => return self.fail_at_position(ErrorCode::SurrogatePair(e), pos),
+                                        Err(e) => {
+                                            return self
+                                                .fail_at_position(ErrorCode::SurrogatePair(e), pos)
+                                        }
                                     }
                                 }
 
-                                CodeUnitType::TrailingSurrogate => return self.fail_at_position(ErrorCode::TrailingSurrogate, pos),
+                                CodeUnitType::TrailingSurrogate => {
+                                    return self.fail_at_position(ErrorCode::TrailingSurrogate, pos)
+                                }
                             }
                         }
 
@@ -443,15 +456,13 @@ impl<'de> JsonDeserializer<'de> {
                 0x00..=0x1F => return self.fail(ErrorCode::UnescapedControlCodePoint),
 
                 // a regular utf8-encoded code point (unless it is malformed)
-                _ => {
-                    match Utf8Char::from_slice_start(self.rest()) {
-                        Err(_) => return self.fail(ErrorCode::InvalidUtf8String),
-                        Ok((_, len)) => unsafe {
-                            decoded.push_str(std::str::from_utf8_unchecked(&self.rest()[..len]));
-                            self.advance(len);
-                        },
-                    }
-                }
+                _ => match Utf8Char::from_slice_start(self.rest()) {
+                    Err(_) => return self.fail(ErrorCode::InvalidUtf8String),
+                    Ok((_, len)) => unsafe {
+                        decoded.push_str(std::str::from_utf8_unchecked(&self.rest()[..len]));
+                        self.advance(len);
+                    },
+                },
             }
         }
     }
@@ -485,7 +496,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     type Error = DecodeJsonError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         match self.peek_ws()? {
             0x6E => {
@@ -521,20 +533,26 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         visitor.visit_bool(self.parse_bool()?)
     }
 
     fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
-        let f = self.parse_number_except(|n| n < std::i8::MIN as f64 || n > std::i8::MAX as f64, ErrorCode::OutOfBoundsI8)?;
+        let f = self.parse_number_except(
+            |n| n < std::i8::MIN as f64 || n > std::i8::MAX as f64,
+            ErrorCode::OutOfBoundsI8,
+        )?;
         visitor.visit_i8(f as i8)
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f < std::i16::MIN as f64 || f > std::i16::MAX as f64 {
@@ -545,7 +563,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f < std::i32::MIN as f64 || f > std::i32::MAX as f64 {
@@ -556,7 +575,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f < -9007199254740992.0f64 || f > 9007199254740992.0f64 {
@@ -567,7 +587,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f > std::u8::MAX as f64 {
@@ -578,7 +599,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f > std::u16::MAX as f64 {
@@ -589,7 +611,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f > std::u32::MAX as f64 {
@@ -600,7 +623,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let f = self.parse_number()?;
         if f > 9007199254740992.0f64 {
@@ -611,19 +635,22 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         visitor.visit_f32(self.parse_number()? as f32)
     }
 
     fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         visitor.visit_f64(self.parse_number()?)
     }
 
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let pos = self.position();
         let s = self.parse_string()?;
@@ -631,17 +658,16 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
 
         match chars.next() {
             None => self.fail_at_position(ErrorCode::NotAChar, pos),
-            Some(c) => {
-                match chars.next() {
-                    None => visitor.visit_char(c),
-                    Some(_) => self.fail_at_position(ErrorCode::NotAChar, pos),
-                }
-            }
+            Some(c) => match chars.next() {
+                None => visitor.visit_char(c),
+                Some(_) => self.fail_at_position(ErrorCode::NotAChar, pos),
+            },
         }
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         // We can't reference json strings directly since they contain escape sequences.
         // For the conversion, we need to allocate an owned buffer, so always do owned
@@ -650,13 +676,15 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         visitor.visit_string(self.parse_string()?)
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         // We can't reference bytes directly since they are stored as base64 strings.
         // For the conversion, we need to allocate an owned buffer, so always do owned
@@ -665,7 +693,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         let pos = self.position();
         match base64::decode(self.parse_naive_string()?) {
@@ -675,7 +704,8 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         if self.rest().starts_with(b"null") {
             self.advance(4);
@@ -686,32 +716,38 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.parse_null()?;
         visitor.visit_unit()
     }
 
-    fn deserialize_unit_struct<V>(self,
-                                  _name: &'static str,
-                                  visitor: V)
-                                  -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn deserialize_unit_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_unit(visitor)
     }
 
-    fn deserialize_newtype_struct<V>(self,
-                                     _name: &'static str,
-                                     visitor: V)
-                                     -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.expect(0x5B, ErrorCode::ExpectedArray)?;
         let value = visitor.visit_seq(CollectionAccessor::new(&mut self))?;
@@ -720,23 +756,27 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_seq(visitor)
     }
 
-    fn deserialize_tuple_struct<V>(self,
-                                   _name: &'static str,
-                                   _len: usize,
-                                   visitor: V)
-                                   -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn deserialize_tuple_struct<V>(
+        self,
+        _name: &'static str,
+        _len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_seq(visitor)
     }
 
     fn deserialize_map<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.expect(0x7B, ErrorCode::ExpectedObject)?;
         let value = visitor.visit_map(CollectionAccessor::new(&mut self))?;
@@ -744,22 +784,26 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
         Ok(value)
     }
 
-    fn deserialize_struct<V>(self,
-                             _name: &'static str,
-                             _fields: &'static [&'static str],
-                             visitor: V)
-                             -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn deserialize_struct<V>(
+        self,
+        _name: &'static str,
+        _fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_map(visitor)
     }
 
-    fn deserialize_enum<V>(self,
-                           _name: &'static str,
-                           _variants: &'static [&'static str],
-                           visitor: V)
-                           -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         let pos = self.position();
         if self.peek()? == 0x22 {
@@ -776,13 +820,15 @@ impl<'a, 'de> Deserializer<'de> for &'a mut JsonDeserializer<'de> {
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_str(visitor)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         self.deserialize_any(visitor)
     }
@@ -803,7 +849,8 @@ impl<'a, 'de> SeqAccess<'de> for CollectionAccessor<'a, 'de> {
     type Error = DecodeJsonError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
-        where T: DeserializeSeed<'de>
+    where
+        T: DeserializeSeed<'de>,
     {
         // Array ends at `]`
         if let 0x5D = self.des.peek_ws()? {
@@ -827,7 +874,8 @@ impl<'a, 'de> MapAccess<'de> for CollectionAccessor<'a, 'de> {
     type Error = DecodeJsonError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
-        where K: DeserializeSeed<'de>
+    where
+        K: DeserializeSeed<'de>,
     {
         // Object ends at `}`
         if let 0x7D = self.des.peek_ws()? {
@@ -846,7 +894,8 @@ impl<'a, 'de> MapAccess<'de> for CollectionAccessor<'a, 'de> {
     }
 
     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
-        where V: DeserializeSeed<'de>
+    where
+        V: DeserializeSeed<'de>,
     {
         self.des.expect_ws(0x3A, ErrorCode::Colon)?; // `:`
 
@@ -870,7 +919,8 @@ impl<'a, 'de> EnumAccess<'de> for Enum<'a, 'de> {
     type Variant = Self;
 
     fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant), Self::Error>
-        where V: DeserializeSeed<'de>
+    where
+        V: DeserializeSeed<'de>,
     {
         self.des.peek_ws()?;
         let val = seed.deserialize(&mut *self.des)?;
@@ -890,24 +940,28 @@ impl<'a, 'de> VariantAccess<'de> for Enum<'a, 'de> {
     }
 
     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value, Self::Error>
-        where T: DeserializeSeed<'de>
+    where
+        T: DeserializeSeed<'de>,
     {
         seed.deserialize(self.des)
     }
 
     fn tuple_variant<V>(self, _len: usize, visitor: V) -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    where
+        V: Visitor<'de>,
     {
         de::Deserializer::deserialize_seq(self.des, visitor)
     }
 
     // Struct variants are represented in JSON as `{ NAME: { K: V, ... } }` so
     // deserialize the inner map here.
-    fn struct_variant<V>(self,
-                         _fields: &'static [&'static str],
-                         visitor: V)
-                         -> Result<V::Value, Self::Error>
-        where V: Visitor<'de>
+    fn struct_variant<V>(
+        self,
+        _fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
     {
         de::Deserializer::deserialize_map(self.des, visitor)
     }
