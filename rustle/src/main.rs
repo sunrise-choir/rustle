@@ -30,6 +30,7 @@ extern crate serde_json;
 extern crate serde_derive;
 
 use serde_json::json;
+use serde_json::Value;
 
 use snafu::{ResultExt, Snafu};
 use ssb_boxstream::BoxStream;
@@ -37,7 +38,7 @@ use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
+use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet, Handler};
 use ssb_validate::par_validate_message_hash_chain_of_feed;
 use ssb_verify_signatures::par_verify_messages;
 use uuid::Uuid;
@@ -105,15 +106,90 @@ fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
     Ok((p, s))
 }
 
-async fn bumrpc(
-    p: Packet,
-    _out: MuxChildSender,
-    _inn: Option<Receiver<Packet>>,
-) -> Result<(), Error> {
-    log_packet(&p);
-    Ok(())
+struct BumRpc{}
+impl Handler for BumRpc {
+    type T= future::Ready<Result<(), Error>>;
+    fn handle(&self, packet: Packet, _sender: MuxChildSender, _receiver: Option<Receiver<Packet>>) -> Self::T{
+        log_packet(&packet);
+        future::ok(())
+    }
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct CreateHistoryStreamArgs{
+    id: String,
+    seq: i32,
+    limit: i64,
+    values: bool,
+    keys: bool,
+    #[serde(rename = "type")]
+    type_key: String,
+
+}
+#[derive(Deserialize, Serialize, Debug)]
+struct CHSRpcMethod{
+    args: Vec<CreateHistoryStreamArgs>,
+    name: Vec<String>,
+    #[serde(rename = "type")]
+    type_key: String,
+
+} 
+#[derive(Deserialize, Serialize, Debug)]
+struct RpcMethod{
+    args: Vec<String>,
+    name: Vec<String>,
+    #[serde(rename = "type")]
+    type_key: String,
+
+} 
+
+struct HandleRpc{db: SqliteSsbDb}
+impl Handler for HandleRpc
+{
+    type T= future::BoxFuture<'static, Result<(), ChildError>> ;
+    fn handle(
+        &self,
+        p: Packet,
+        mut out: MuxChildSender,
+        _inn: Option<Receiver<Packet>>,
+    ) -> Self::T{
+        log_packet(&p);
+
+        if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
+            println!("got a msg {:?}", method);
+            if method.name != ["createHistoryStream"]{
+                println!("not a chs request");
+                // This doesn't compile because it moves `out` out of this method.
+                //return Box::pin(out.send_end(BodyType::Json, "true".to_string().into_bytes()))
+            }
+            println!("got create_hist_stream_msg method: {:?}", method);
+
+            let args = method.args[0].clone(); 
+            println!("args were {:?}", args);
+            let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
+            let limit = if args.limit < 0 {None} else {Some(args.limit)};
+            let entries = self.db.get_entries_newer_than_sequence(&feed_id, args.seq, limit, args.keys, true).unwrap() ;
+
+            println!("retrieved {} entries", entries.len());
+
+            entries.into_iter().for_each(|entry|{
+                block_on(out.send(BodyType::Json, entry)).unwrap();
+            });
+        }
+
+        Box::pin(future::ok(()))
+    }
+}
+
+fn create_gossip_ping_msg() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "name": ["gossip", "ping"],
+        "args": [{
+            "timeout": 300000,
+        }],
+        "type":"duplex"}))
+    .unwrap()
+}
 fn create_hist_stream_msg(feed_id: &str, start: u32, limit: Option<u32>) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "name": ["createHistoryStream"],
@@ -147,6 +223,43 @@ fn main() -> Result<(), Error> {
                 .takes_value(true)
                 .help("ssb secret (key) file"),
         )
+        .subcommand(
+            SubCommand::with_name("handleReplicationRequests")
+                .about("Connect to a server and handle any replication requests it makes")
+                .arg(
+                    Arg::with_name("addr")
+                        .long("addr")
+                        .short("a")
+                        .takes_value(true)
+                        .default_value("127.0.0.1:8008")
+                        .help("ip:port of peer"),
+                )
+                .arg(
+                    Arg::with_name("key")
+                        .long("key")
+                        .short("k")
+                        .required(true)
+                        .takes_value(true)
+                        .help("base64-encoded public key of peer"),
+                )
+                .arg(
+                    Arg::with_name("offsetpath")
+                        .long("offsetpath")
+                        .short("o")
+                        .required(true)
+                        .takes_value(true)
+                        .help("path to ssb_db offset file"),
+                )
+                .arg(
+                    Arg::with_name("dbpath")
+                        .long("dbpath")
+                        .short("db")
+                        .required(true)
+                        .takes_value(true)
+                        .help("path to ssb_db sqlite file"),
+                ),
+        )
+
         .subcommand(
             SubCommand::with_name("replicatefeed")
                 .about("Replicate a feed into a ssb_db")
@@ -251,6 +364,64 @@ fn main() -> Result<(), Error> {
         .get_matches();
 
     match app_m.subcommand() {
+        ("handleReplicationRequests", Some(sub_m)) => {
+            let secret_path = app_m.value_of("secret").unwrap();
+
+            let peer_key = sub_m.value_of("key").unwrap();
+            let peer_addr = sub_m.value_of("addr").unwrap();
+            let offset_log_path = sub_m.value_of("offsetpath").unwrap().clone();
+            let db_path = sub_m.value_of("dbpath").unwrap().clone();
+
+
+            let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
+
+            let net_id = NetworkKey::SSB_MAIN_NET;
+
+            let server_pk = PublicKey::from_slice(&base64::decode(peer_key).unwrap()).unwrap();
+            let (box_r, box_w) = block_on(async {
+                let mut tcp = TcpStream::connect(&peer_addr)
+                    .await
+                    .context(TcpConnection)?;
+                let o = client(&mut tcp, net_id, pk, sk, server_pk).await.unwrap();
+
+                let (tcp_r, tcp_w) = tcp.split();
+                Ok(BoxStream::client_side(tcp_r, tcp_w, o).split())
+            })?;
+            eprintln!("client connected");
+
+            let mut pool = LocalPool::new();
+            let spawner = pool.spawner();
+
+            let db = SqliteSsbDb::new(db_path, offset_log_path);
+
+            let handle_rpc = HandleRpc{db};
+            let (mut out, done ) = mux(box_r, box_w, handle_rpc);
+            let done = spawner.spawn_local_with_handle(done).unwrap();
+
+            let msg = create_gossip_ping_msg();
+            //let feed_id = "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519";
+            //let msg = create_hist_stream_msg(feed_id, 1 as u32 + 1, Some(10000));
+
+            let r = async move {
+                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
+                //out.send_duplex(BodyType::Json, msg).await;
+                a_in.for_each(|msg|{
+                    println!("ping msg: {}", String::from_utf8(msg.body).unwrap());
+                    future::ready(())
+                }).await;
+
+                a_out
+                    .send_end(BodyType::Json, "true".bytes().collect())
+                    .await
+            };
+
+            let r = spawner.spawn_local_with_handle(r).unwrap();
+            pool.run_until(r).unwrap();
+            pool.run_until(done).unwrap();
+
+            Ok(())
+        }
+
         ("replicatefeed", Some(sub_m)) => {
             let secret_path = app_m.value_of("secret").unwrap();
             let feed_id = sub_m.value_of("feed").unwrap();
@@ -286,6 +457,7 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
+            let bumrpc = BumRpc{};
             let (mut out, done) = mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
@@ -387,6 +559,7 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
+            let bumrpc = BumRpc{};
             let (mut out, done) = mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
@@ -394,14 +567,12 @@ fn main() -> Result<(), Error> {
 
             let r = async move {
                 let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
-                let packets = a_in.map(|p| p.body).take(1).collect::<Vec<_>>().await;
 
-                println!("{:?}", packets);
-                //a_in.for_each(|p| {
-                //    // log_packet(&p);
-                //    out_log.append(&p.body).unwrap();
-                //    future::ready(())
-                //}).await;
+                a_in.for_each(|p| {
+                    // log_packet(&p);
+                    out_log.append(&p.body).unwrap();
+                    future::ready(())
+                }).await;
                 a_out
                     .send_end(BodyType::Json, "true".bytes().collect())
                     .await
