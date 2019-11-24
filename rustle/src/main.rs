@@ -1,4 +1,6 @@
 #![allow(unused_imports)]
+#![feature(async_closure)]
+#![feature(impl_trait_in_bindings)]
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read};
@@ -38,7 +40,7 @@ use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet, Handler};
+use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
 use ssb_validate::par_validate_message_hash_chain_of_feed;
 use ssb_verify_signatures::par_verify_messages;
 use uuid::Uuid;
@@ -106,13 +108,9 @@ fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
     Ok((p, s))
 }
 
-struct BumRpc{}
-impl Handler for BumRpc {
-    type T= future::Ready<Result<(), Error>>;
-    fn handle(&self, packet: Packet, _sender: MuxChildSender, _receiver: Option<Receiver<Packet>>) -> Self::T{
-        log_packet(&packet);
-        future::ok(())
-    }
+async fn bumrpc(packet: Packet, _sender: MuxChildSender, _receiver: Option<Receiver<Packet>>) -> Result<(), Error>{
+    log_packet(&packet);
+    Ok(())
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -142,44 +140,6 @@ struct RpcMethod{
     type_key: String,
 
 } 
-
-struct HandleRpc{db: SqliteSsbDb}
-impl Handler for HandleRpc
-{
-    type T= future::BoxFuture<'static, Result<(), ChildError>> ;
-    fn handle(
-        &self,
-        p: Packet,
-        mut out: MuxChildSender,
-        _inn: Option<Receiver<Packet>>,
-    ) -> Self::T{
-        log_packet(&p);
-
-        if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
-            println!("got a msg {:?}", method);
-            if method.name != ["createHistoryStream"]{
-                println!("not a chs request");
-                // This doesn't compile because it moves `out` out of this method.
-                //return Box::pin(out.send_end(BodyType::Json, "true".to_string().into_bytes()))
-            }
-            println!("got create_hist_stream_msg method: {:?}", method);
-
-            let args = method.args[0].clone(); 
-            println!("args were {:?}", args);
-            let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-            let limit = if args.limit < 0 {None} else {Some(args.limit)};
-            let entries = self.db.get_entries_newer_than_sequence(&feed_id, args.seq, limit, args.keys, true).unwrap() ;
-
-            println!("retrieved {} entries", entries.len());
-
-            entries.into_iter().for_each(|entry|{
-                block_on(out.send(BodyType::Json, entry)).unwrap();
-            });
-        }
-
-        Box::pin(future::ok(()))
-    }
-}
 
 fn create_gossip_ping_msg() -> Vec<u8> {
     serde_json::to_vec(&json!({
@@ -352,7 +312,7 @@ fn main() -> Result<(), Error> {
                         .long("out")
                         .short("o")
                         .takes_value(true)
-                        .default_value(&default_out_path)
+                        //.default_value(&default_out_path)
                         .help(""),
                 )
                 .arg(
@@ -392,31 +352,58 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let db = SqliteSsbDb::new(db_path, offset_log_path);
 
-            let handle_rpc = HandleRpc{db};
-            let (mut out, done ) = mux(box_r, box_w, handle_rpc);
+            let (_out, done )= mux::<_,_,_,Error, _>(box_r, box_w, async move | p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>, |{
+                log_packet(&p);
+
+                // Not that we have to hard code the path to the db here. Otherwise there's an
+                // borrow checker error if we use `offset_log_path` and `db_path`.
+                let db = SqliteSsbDb::new("/tmp/ssb-db.sqlite3", "/tmp/ssb-db.offset");
+                if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
+                    if method.name != ["createHistoryStream"]{
+                        out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
+                        return Ok(())
+                    }
+
+                    let args = method.args[0].clone(); 
+                    let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
+                    let limit = if args.limit < 0 {None} else {Some(args.limit)};
+                    let entries = db.get_entries_newer_than_sequence(&feed_id, args.seq, limit, args.keys, true).unwrap() ;
+
+                    println!("retrieved {} entries", entries.len());
+
+                    let mut strm = futures::stream::iter(entries.into_iter())
+                        .map(|entry|(BodyType::Json, entry));
+
+                    out.send_all(&mut strm).await.unwrap();
+                    //out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
+                    println!("sent all entries");
+
+                }
+                Ok(())
+
+            });
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             let msg = create_gossip_ping_msg();
             //let feed_id = "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519";
             //let msg = create_hist_stream_msg(feed_id, 1 as u32 + 1, Some(10000));
 
-            let r = async move {
-                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
-                //out.send_duplex(BodyType::Json, msg).await;
-                a_in.for_each(|msg|{
-                    println!("ping msg: {}", String::from_utf8(msg.body).unwrap());
-                    future::ready(())
-                }).await;
-
-                a_out
-                    .send_end(BodyType::Json, "true".bytes().collect())
-                    .await
-            };
-
-            let r = spawner.spawn_local_with_handle(r).unwrap();
-            pool.run_until(r).unwrap();
+//            let r = async move {
+//                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
+//                //out.send_duplex(BodyType::Json, msg).await;
+//                a_in.for_each(|msg|{
+//                    println!("ping msg: {}", String::from_utf8(msg.body).unwrap());
+//                    future::ready(())
+//                }).await;
+//
+//                a_out
+//                    .send_end(BodyType::Json, "true".bytes().collect())
+//                    .await
+//            };
+//
+//            let r = spawner.spawn_local_with_handle(r).unwrap();
+//            pool.run_until(r).unwrap();
             pool.run_until(done).unwrap();
 
             Ok(())
@@ -457,7 +444,6 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let bumrpc = BumRpc{};
             let (mut out, done) = mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
@@ -559,7 +545,6 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let bumrpc = BumRpc{};
             let (mut out, done) = mux(box_r, box_w, bumrpc);
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
