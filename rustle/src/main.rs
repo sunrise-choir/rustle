@@ -1,13 +1,12 @@
 #![allow(unused_imports)]
 #![feature(async_closure)]
 
+use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::convert::TryInto;
-
 
 use base64::{decode_config_slice, STANDARD};
 use clap::{App, Arg, SubCommand};
@@ -42,9 +41,9 @@ use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
+use ssb_publish::{publish, Content};
 use ssb_validate::par_validate_message_hash_chain_of_feed;
 use ssb_verify_signatures::par_verify_messages;
-use ssb_publish::{publish, Content};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -110,13 +109,17 @@ fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
     Ok((p, s))
 }
 
-async fn bumrpc(packet: Packet, _sender: MuxChildSender, _receiver: Option<Receiver<Packet>>) -> Result<(), Error>{
+async fn bumrpc(
+    packet: Packet,
+    _sender: MuxChildSender,
+    _receiver: Option<Receiver<Packet>>,
+) -> Result<(), Error> {
     log_packet(&packet);
     Ok(())
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct CreateHistoryStreamArgs{
+struct CreateHistoryStreamArgs {
     id: String,
     seq: i32,
     limit: i64,
@@ -124,24 +127,21 @@ struct CreateHistoryStreamArgs{
     keys: bool,
     #[serde(rename = "type")]
     type_key: String,
-
 }
 #[derive(Deserialize, Serialize, Debug)]
-struct CHSRpcMethod{
+struct CHSRpcMethod {
     args: Vec<CreateHistoryStreamArgs>,
     name: Vec<String>,
     #[serde(rename = "type")]
     type_key: String,
-
-} 
+}
 #[derive(Deserialize, Serialize, Debug)]
-struct RpcMethod{
+struct RpcMethod {
     args: Vec<String>,
     name: Vec<String>,
     #[serde(rename = "type")]
     type_key: String,
-
-} 
+}
 
 fn create_gossip_ping_msg() -> Vec<u8> {
     serde_json::to_vec(&json!({
@@ -221,7 +221,6 @@ fn main() -> Result<(), Error> {
                         .help("path to ssb_db sqlite file"),
                 ),
         )
-
         .subcommand(
             SubCommand::with_name("replicatefeed")
                 .about("Replicate a feed into a ssb_db")
@@ -344,9 +343,11 @@ fn main() -> Result<(), Error> {
 
             let peer_key = sub_m.value_of("key").unwrap();
             let peer_addr = sub_m.value_of("addr").unwrap();
+
+            // Note that we have to hard code the path to the db below. Otherwise there's a
+            // borrow checker error if we use `offset_log_path` and `db_path`.
             let offset_log_path = sub_m.value_of("offsetpath").unwrap().clone();
             let db_path = sub_m.value_of("dbpath").unwrap().clone();
-
 
             let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
 
@@ -367,37 +368,48 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
+            let (_out, done) = mux::<_, _, _, Error, _>(
+                box_r,
+                box_w,
+                async move |p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>| {
+                    log_packet(&p);
 
-            let (_out, done )= mux::<_,_,_,Error, _>(box_r, box_w, async move | p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>, |{
-                log_packet(&p);
+                    // Note that we have to hard code the path to the db here. Otherwise there's a
+                    // borrow checker error if we use `offset_log_path` and `db_path`.
+                    let db = SqliteSsbDb::new("/tmp/ssb-db.sqlite3", "/tmp/ssb-db.offset");
+                    if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
+                        if method.name != ["createHistoryStream"] {
+                            out.send_end(BodyType::Json, "true".to_string().into_bytes())
+                                .await
+                                .unwrap();
+                            return Ok(());
+                        }
 
-                // Note that we have to hard code the path to the db here. Otherwise there's an
-                // borrow checker error if we use `offset_log_path` and `db_path`.
-                let db = SqliteSsbDb::new("/tmp/ssb-db.sqlite3", "/tmp/ssb-db.offset");
-                if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
-                    if method.name != ["createHistoryStream"]{
-                        out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
-                        return Ok(())
+                        let args = method.args[0].clone();
+                        let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
+                        let limit = if args.limit < 0 {
+                            None
+                        } else {
+                            Some(args.limit)
+                        };
+                        let entries = db
+                            .get_entries_newer_than_sequence(
+                                &feed_id, args.seq, limit, args.keys, true,
+                            )
+                            .unwrap();
+
+                        println!("retrieved {} entries", entries.len());
+
+                        let mut strm = futures::stream::iter(entries.into_iter())
+                            .map(|entry| (BodyType::Json, entry));
+
+                        out.send_all(&mut strm).await.unwrap();
+                        //out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
+                        println!("sent all entries");
                     }
-
-                    let args = method.args[0].clone(); 
-                    let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-                    let limit = if args.limit < 0 {None} else {Some(args.limit)};
-                    let entries = db.get_entries_newer_than_sequence(&feed_id, args.seq, limit, args.keys, true).unwrap() ;
-
-                    println!("retrieved {} entries", entries.len());
-
-                    let mut strm = futures::stream::iter(entries.into_iter())
-                        .map(|entry|(BodyType::Json, entry));
-
-                    out.send_all(&mut strm).await.unwrap();
-                    //out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
-                    println!("sent all entries");
-
-                }
-                Ok(())
-
-            });
+                    Ok(())
+                },
+            );
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             pool.run_until(done).unwrap();
@@ -452,7 +464,7 @@ fn main() -> Result<(), Error> {
 
                 // We're potentially collecting an entire feed here. My ~6000 message feed is ~4mb
                 // so it's not a huge deal. Later it could be good to `batch` chunks up for
-                // verification + validation and appending to the db. 
+                // verification + validation and appending to the db.
                 let packets = a_in.map(|p| p.body).collect::<Vec<_>>().await;
 
                 if packets.len() > 0 {
@@ -463,7 +475,7 @@ fn main() -> Result<(), Error> {
 
                     // Later, we should add stuff to store into about broken feeds in the db.
                     // We should store why they broke and even store the offending message.
-                    // Then we can do a avoid trying to replicate broken feeds over and over. 
+                    // Then we can do a avoid trying to replicate broken feeds over and over.
                     par_validate_message_hash_chain_of_feed(&packets, previous.as_ref()).unwrap();
                     eprintln!("validated messages");
 
@@ -490,9 +502,10 @@ fn main() -> Result<(), Error> {
         }
 
         ("createHistoryStream", Some(sub_m)) => {
-
             let feed_id = sub_m.value_of("feed").unwrap();
-            let limit = sub_m.value_of("limit").map(|l| str::parse::<i64>(l).unwrap());
+            let limit = sub_m
+                .value_of("limit")
+                .map(|l| str::parse::<i64>(l).unwrap());
             let seq = sub_m.value_of("seq").map(|l| str::parse::<i32>(l).unwrap());
 
             let offset_log_path = sub_m.value_of("offsetpath").unwrap();
@@ -503,10 +516,13 @@ fn main() -> Result<(), Error> {
             let db = SqliteSsbDb::new(db_path, offset_log_path);
 
             //TODO add keys and values switches to args. For now they're both true.
-            let entries = db.get_entries_newer_than_sequence(&author, seq.unwrap_or(0), limit, true, true).unwrap() ;
+            let entries = db
+                .get_entries_newer_than_sequence(&author, seq.unwrap_or(0), limit, true, true)
+                .unwrap();
 
-            entries.iter()
-                .flat_map(|entry|serde_json::from_slice::<Value>(&entry))
+            entries
+                .iter()
+                .flat_map(|entry| serde_json::from_slice::<Value>(&entry))
                 .flat_map(|val| serde_json::to_string_pretty(&val))
                 .for_each(|entry| println!("{}", entry));
 
@@ -519,9 +535,12 @@ fn main() -> Result<(), Error> {
 
             let author = Multikey::from_ed25519(pk.as_ref().try_into().unwrap());
 
-            let content = sub_m.value_of("content").map(|content|{
-                serde_json::from_str::<Value>(content).expect("content must be valid json")
-            }).unwrap();
+            let content = sub_m
+                .value_of("content")
+                .map(|content| {
+                    serde_json::from_str::<Value>(content).expect("content must be valid json")
+                })
+                .unwrap();
 
             assert!(content.get("type").is_some(), "content must have a `type`");
 
@@ -529,18 +548,20 @@ fn main() -> Result<(), Error> {
             let db_path = sub_m.value_of("dbpath").unwrap();
             let db = SqliteSsbDb::new(db_path, offset_log_path);
 
-            let previous: Option<Vec<_>> = db.get_feed_latest_sequence(&author)
+            let previous: Option<Vec<_>> = db
+                .get_feed_latest_sequence(&author)
                 .unwrap_or(None)
-                .map(|seq|{
-                    db.get_entry_by_seq(&author, seq).unwrap()
-                }).unwrap_or(None);
-            
+                .map(|seq| db.get_entry_by_seq(&author, seq).unwrap())
+                .unwrap_or(None);
 
             let new_message = publish(Content::Plain(content), previous, &pk, &sk, 0.0).unwrap();
 
-            println!("Published new message:\n{}", std::str::from_utf8(&new_message).unwrap());
+            println!(
+                "Published new message:\n{}",
+                std::str::from_utf8(&new_message).unwrap()
+            );
 
-            db.append_batch(&author, &[new_message]).unwrap();  
+            db.append_batch(&author, &[new_message]).unwrap();
 
             Ok(())
         }
