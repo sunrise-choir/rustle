@@ -20,6 +20,7 @@ ssb-db = {path= "../../ssb-db"}
 ssb-handshake = "0.5.0"
 ssb-multiformats = { git = "https://github.com/sunrise-choir/ssb-multiformats"}
 ssb-packetstream = { version = "0.1.0", path = "../ssb-packetstream" }
+ssb-publish = { git = "https://github.com/sunrise-choir/ssb-publish", version = "0.3.0"}
 ssb-verify-signatures = {path= "../../ssb-verify-signatures"}
 ssb-validate = {path= "../../ssb-validate"}
 uuid = { version = "0.7", features = ["v4"] }

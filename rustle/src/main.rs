@@ -1,12 +1,13 @@
 #![allow(unused_imports)]
 #![feature(async_closure)]
-#![feature(impl_trait_in_bindings)]
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::convert::TryInto;
+
 
 use base64::{decode_config_slice, STANDARD};
 use clap::{App, Arg, SubCommand};
@@ -43,6 +44,7 @@ use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
 use ssb_validate::par_validate_message_hash_chain_of_feed;
 use ssb_verify_signatures::par_verify_messages;
+use ssb_publish::{publish, Content};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -265,24 +267,8 @@ fn main() -> Result<(), Error> {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("getfeed")
-                .about("Send createHistoryStream request")
-                .arg(
-                    Arg::with_name("addr")
-                        .long("addr")
-                        .short("a")
-                        .takes_value(true)
-                        .default_value("127.0.0.1:8008")
-                        .help("ip:port of peer"),
-                )
-                .arg(
-                    Arg::with_name("key")
-                        .long("key")
-                        .short("k")
-                        .required(true)
-                        .takes_value(true)
-                        .help("base64-encoded public key of peer"),
-                )
+            SubCommand::with_name("createHistoryStream")
+                .about("Get messages by a specific feed")
                 .arg(
                     Arg::with_name("feed")
                         .long("feed")
@@ -294,31 +280,60 @@ fn main() -> Result<(), Error> {
                 .arg(
                     Arg::with_name("seq")
                         .long("seq")
-                        .short("q")
+                        .short("s")
                         .takes_value(true)
-                        .default_value("0")
-                        .help(""),
+                        .help("select values larger than seq"),
                 )
                 .arg(
                     Arg::with_name("limit")
                         .long("limit")
                         .short("n")
                         .takes_value(true)
-                        .default_value("10")
-                        .help(""),
+                        .help("limit the number of results"),
                 )
                 .arg(
-                    Arg::with_name("out")
-                        .long("out")
+                    Arg::with_name("offsetpath")
+                        .long("offsetpath")
                         .short("o")
+                        .required(true)
                         .takes_value(true)
-                        //.default_value(&default_out_path)
-                        .help(""),
+                        .help("path to ssb_db offset file"),
                 )
                 .arg(
-                    Arg::with_name("overwrite")
-                        .long("overwrite")
-                        .help("Overwrite output file, if it exists."),
+                    Arg::with_name("dbpath")
+                        .long("dbpath")
+                        .short("db")
+                        .required(true)
+                        .takes_value(true)
+                        .help("path to ssb_db sqlite file"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("publish")
+                .about("publish a new message of well formed json")
+                .arg(
+                    Arg::with_name("content")
+                        .long("content")
+                        .short("c")
+                        .required(true)
+                        .takes_value(true)
+                        .help("valid json string with a `type`"),
+                )
+                .arg(
+                    Arg::with_name("offsetpath")
+                        .long("offsetpath")
+                        .short("o")
+                        .required(true)
+                        .takes_value(true)
+                        .help("path to ssb_db offset file"),
+                )
+                .arg(
+                    Arg::with_name("dbpath")
+                        .long("dbpath")
+                        .short("db")
+                        .required(true)
+                        .takes_value(true)
+                        .help("path to ssb_db sqlite file"),
                 ),
         )
         .get_matches();
@@ -356,7 +371,7 @@ fn main() -> Result<(), Error> {
             let (_out, done )= mux::<_,_,_,Error, _>(box_r, box_w, async move | p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>, |{
                 log_packet(&p);
 
-                // Not that we have to hard code the path to the db here. Otherwise there's an
+                // Note that we have to hard code the path to the db here. Otherwise there's an
                 // borrow checker error if we use `offset_log_path` and `db_path`.
                 let db = SqliteSsbDb::new("/tmp/ssb-db.sqlite3", "/tmp/ssb-db.offset");
                 if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
@@ -385,25 +400,6 @@ fn main() -> Result<(), Error> {
             });
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
-            let msg = create_gossip_ping_msg();
-            //let feed_id = "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519";
-            //let msg = create_hist_stream_msg(feed_id, 1 as u32 + 1, Some(10000));
-
-//            let r = async move {
-//                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
-//                //out.send_duplex(BodyType::Json, msg).await;
-//                a_in.for_each(|msg|{
-//                    println!("ping msg: {}", String::from_utf8(msg.body).unwrap());
-//                    future::ready(())
-//                }).await;
-//
-//                a_out
-//                    .send_end(BodyType::Json, "true".bytes().collect())
-//                    .await
-//            };
-//
-//            let r = spawner.spawn_local_with_handle(r).unwrap();
-//            pool.run_until(r).unwrap();
             pool.run_until(done).unwrap();
 
             Ok(())
@@ -493,83 +489,61 @@ fn main() -> Result<(), Error> {
             Ok(())
         }
 
-        ("getfeed", Some(sub_m)) => {
-            let secret_path = app_m.value_of("secret").unwrap();
+        ("createHistoryStream", Some(sub_m)) => {
+
             let feed_id = sub_m.value_of("feed").unwrap();
-            let feed_seq = u32::from_str_radix(sub_m.value_of("seq").unwrap(), 10).unwrap();
-            let feed_limit = u32::from_str_radix(sub_m.value_of("limit").unwrap(), 10).unwrap();
+            let limit = sub_m.value_of("limit").map(|l| str::parse::<i64>(l).unwrap());
+            let seq = sub_m.value_of("seq").map(|l| str::parse::<i32>(l).unwrap());
 
-            let peer_key = sub_m.value_of("key").unwrap();
-            let peer_addr = sub_m.value_of("addr").unwrap();
-            let out_path = sub_m.value_of("out").unwrap();
-            let overwrite = sub_m.is_present("overwrite");
+            let offset_log_path = sub_m.value_of("offsetpath").unwrap();
+            let db_path = sub_m.value_of("dbpath").unwrap();
 
-            if !overwrite && Path::new(out_path).exists() {
-                eprintln!("Output path `{}` exists.", out_path);
-                eprintln!("Use `--overwrite` option to overwrite.");
-                return Ok(());
-            }
+            let author = Multikey::from_legacy(&feed_id.as_bytes()).unwrap().0;
 
-            eprintln!("Writing to log: {}", out_path);
+            let db = SqliteSsbDb::new(db_path, offset_log_path);
 
-            let file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&out_path)
-                .context(FlumeIo)?;
+            //TODO add keys and values switches to args. For now they're both true.
+            let entries = db.get_entries_newer_than_sequence(&author, seq.unwrap_or(0), limit, true, true).unwrap() ;
 
-            let mut out_log = OffsetLog::<u32>::from_file(file).unwrap();
-
-            let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
-
-            let net_id = NetworkKey::SSB_MAIN_NET;
-
-            // ./rustle --secret-file ~/.testnet/secret getfeed --feed "@U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=.ed25519" --addr "134.209.164.64:8008" --key "/1OZ3fUmzKcaKyuyw5ffFHcpStayDTco9zMN7R1ZE84="
-
-            // let key = "U5GvOKP/YUza9k53DSXxT0mk3PIrnyAmessvNfZl5E0=";
-            // let addr = "127.0.0.1:8008";
-
-            let server_pk = PublicKey::from_slice(&base64::decode(peer_key).unwrap()).unwrap();
-            let (box_r, box_w) = block_on(async {
-                let mut tcp = TcpStream::connect(&peer_addr)
-                    .await
-                    .context(TcpConnection)?;
-                let o = client(&mut tcp, net_id, pk, sk, server_pk).await.unwrap();
-
-                let (tcp_r, tcp_w) = tcp.split();
-                Ok(BoxStream::client_side(tcp_r, tcp_w, o).split())
-            })?;
-            eprintln!("client connected");
-
-            let mut pool = LocalPool::new();
-            let spawner = pool.spawner();
-
-            let (mut out, done) = mux(box_r, box_w, bumrpc);
-            let done = spawner.spawn_local_with_handle(done).unwrap();
-
-            let msg = create_hist_stream_msg(feed_id, feed_seq, Some(feed_limit));
-
-            let r = async move {
-                let (mut a_out, a_in) = out.send_duplex(BodyType::Json, msg).await?;
-
-                a_in.for_each(|p| {
-                    // log_packet(&p);
-                    out_log.append(&p.body).unwrap();
-                    future::ready(())
-                }).await;
-                a_out
-                    .send_end(BodyType::Json, "true".bytes().collect())
-                    .await
-            };
-
-            let r = spawner.spawn_local_with_handle(r).unwrap();
-            pool.run_until(r).unwrap();
-            pool.run_until(done).unwrap();
+            entries.iter()
+                .flat_map(|entry|serde_json::from_slice::<Value>(&entry))
+                .flat_map(|val| serde_json::to_string_pretty(&val))
+                .for_each(|entry| println!("{}", entry));
 
             Ok(())
         }
 
+        ("publish", Some(sub_m)) => {
+            let secret_path = app_m.value_of("secret").unwrap();
+            let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
+
+            let author = Multikey::from_ed25519(pk.as_ref().try_into().unwrap());
+
+            let content = sub_m.value_of("content").map(|content|{
+                serde_json::from_str::<Value>(content).expect("content must be valid json")
+            }).unwrap();
+
+            assert!(content.get("type").is_some(), "content must have a `type`");
+
+            let offset_log_path = sub_m.value_of("offsetpath").unwrap();
+            let db_path = sub_m.value_of("dbpath").unwrap();
+            let db = SqliteSsbDb::new(db_path, offset_log_path);
+
+            let previous: Option<Vec<_>> = db.get_feed_latest_sequence(&author)
+                .unwrap_or(None)
+                .map(|seq|{
+                    db.get_entry_by_seq(&author, seq).unwrap()
+                }).unwrap_or(None);
+            
+
+            let new_message = publish(Content::Plain(content), previous, &pk, &sk, 0.0).unwrap();
+
+            println!("Published new message:\n{}", std::str::from_utf8(&new_message).unwrap());
+
+            db.append_batch(&author, &[new_message]).unwrap();  
+
+            Ok(())
+        }
         _ => {
             // println!("{}", app_m.usage());
             Ok(())
