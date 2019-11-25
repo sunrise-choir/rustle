@@ -42,8 +42,8 @@ use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
 use ssb_publish::{publish, Content};
-use ssb_validate::par_validate_message_hash_chain_of_feed;
-use ssb_verify_signatures::par_verify_messages;
+use ssb_validate::{par_validate_message_hash_chain_of_feed, validate_message_hash_chain};
+use ssb_verify_signatures::{par_verify_messages, verify_message};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -122,11 +122,9 @@ async fn bumrpc(
 struct CreateHistoryStreamArgs {
     id: String,
     seq: i32,
-    limit: i64,
-    values: bool,
-    keys: bool,
-    #[serde(rename = "type")]
-    type_key: String,
+    limit: Option<i64>,
+    values: Option<bool>,
+    keys: Option<bool>,
 }
 #[derive(Deserialize, Serialize, Debug)]
 struct CHSRpcMethod {
@@ -143,15 +141,6 @@ struct RpcMethod {
     type_key: String,
 }
 
-fn create_gossip_ping_msg() -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "name": ["gossip", "ping"],
-        "args": [{
-            "timeout": 300000,
-        }],
-        "type":"duplex"}))
-    .unwrap()
-}
 fn create_hist_stream_msg(feed_id: &str, start: u32, limit: Option<u32>) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "name": ["createHistoryStream"],
@@ -160,6 +149,8 @@ fn create_hist_stream_msg(feed_id: &str, start: u32, limit: Option<u32>) -> Vec<
             "seq": start,
             "limit": limit,
             "live": false,
+            "keys": true,
+            "values": true
         }],
         "type":"source"}))
     .unwrap()
@@ -171,7 +162,7 @@ fn temp_path() -> String {
 }
 
 fn main() -> Result<(), Error> {
-    let default_out_path = temp_path();
+    let _default_out_path = temp_path();
 
     let app_m = App::new("rustle")
         .version("0.1")
@@ -346,8 +337,8 @@ fn main() -> Result<(), Error> {
 
             // Note that we have to hard code the path to the db below. Otherwise there's a
             // borrow checker error if we use `offset_log_path` and `db_path`.
-            let offset_log_path = sub_m.value_of("offsetpath").unwrap().clone();
-            let db_path = sub_m.value_of("dbpath").unwrap().clone();
+            let _offset_log_path = sub_m.value_of("offsetpath").unwrap().clone();
+            let _db_path = sub_m.value_of("dbpath").unwrap().clone();
 
             let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
 
@@ -384,28 +375,32 @@ fn main() -> Result<(), Error> {
                                 .unwrap();
                             return Ok(());
                         }
+                        eprintln!("got a chs request.");
 
                         let args = method.args[0].clone();
                         let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-                        let limit = if args.limit < 0 {
-                            None
-                        } else {
-                            Some(args.limit)
-                        };
                         let entries = db
                             .get_entries_newer_than_sequence(
-                                &feed_id, args.seq, limit, args.keys, true,
+                                &feed_id,
+                                args.seq - 1,
+                                args.limit,
+                                args.keys.unwrap_or(false),
+                                true,
                             )
                             .unwrap();
 
-                        println!("retrieved {} entries", entries.len());
+                        eprintln!("retrieved {} entries", entries.len());
 
                         let mut strm = futures::stream::iter(entries.into_iter())
                             .map(|entry| (BodyType::Json, entry));
 
                         out.send_all(&mut strm).await.unwrap();
-                        //out.send_end(BodyType::Json, "true".to_string().into_bytes()).await.unwrap();
-                        println!("sent all entries");
+                        out.send_end(BodyType::Json, "true".to_string().into_bytes())
+                            .await
+                            .unwrap();
+                        eprintln!("sent all entries");
+                    } else {
+                        eprintln!("couldn't parse packet as CHSRpcMethod");
                     }
                     Ok(())
                 },
@@ -522,9 +517,7 @@ fn main() -> Result<(), Error> {
 
             entries
                 .iter()
-                .flat_map(|entry| serde_json::from_slice::<Value>(&entry))
-                .flat_map(|val| serde_json::to_string_pretty(&val))
-                .for_each(|entry| println!("{}", entry));
+                .for_each(|entry| println!("{}", std::str::from_utf8(entry).unwrap()));
 
             Ok(())
         }
@@ -554,12 +547,16 @@ fn main() -> Result<(), Error> {
                 .map(|seq| db.get_entry_by_seq(&author, seq).unwrap())
                 .unwrap_or(None);
 
-            let new_message = publish(Content::Plain(content), previous, &pk, &sk, 0.0).unwrap();
+            let new_message =
+                publish(Content::Plain(content), previous.clone(), &pk, &sk, 0.0).unwrap();
 
-            println!(
-                "Published new message:\n{}",
-                std::str::from_utf8(&new_message).unwrap()
-            );
+            // Some extra safety here, just in case publish is broken.
+            verify_message(&new_message).expect("published message sig was not valid");
+            validate_message_hash_chain(&new_message, previous)
+                .expect("published message hash chain was not valid");
+
+            eprintln!("published a new message!");
+            println!("{}", std::str::from_utf8(&new_message).unwrap());
 
             db.append_batch(&author, &[new_message]).unwrap();
 
