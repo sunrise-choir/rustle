@@ -8,5 +8,7 @@
 mod de;
 mod ser;
 
-pub use self::de::{JsonDeserializer, DecodeJsonError, ErrorCode, from_slice, from_slice_partial};
-pub use self::ser::{JsonSerializer, EncodeJsonError, to_writer, to_vec, to_string, to_writer_indent};
+pub use self::de::{from_slice, from_slice_partial, DecodeJsonError, ErrorCode, JsonDeserializer};
+pub use self::ser::{
+    to_string, to_vec, to_writer, to_writer_indent, EncodeJsonError, JsonSerializer,
+};
