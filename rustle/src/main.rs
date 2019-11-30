@@ -1,5 +1,4 @@
 #![allow(unused_imports)]
-#![feature(async_closure)]
 
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
@@ -335,10 +334,8 @@ fn main() -> Result<(), Error> {
             let peer_key = sub_m.value_of("key").unwrap();
             let peer_addr = sub_m.value_of("addr").unwrap();
 
-            // Note that we have to hard code the path to the db below. Otherwise there's a
-            // borrow checker error if we use `offset_log_path` and `db_path`.
-            let _offset_log_path = sub_m.value_of("offsetpath").unwrap().clone();
-            let _db_path = sub_m.value_of("dbpath").unwrap().clone();
+            let offset_log_path = sub_m.value_of("offsetpath").unwrap().to_string();
+            let db_path = sub_m.value_of("dbpath").unwrap().to_string();
 
             let (pk, sk) = load_keys_from_path(&secret_path).context(ReadSecretFile)?;
 
@@ -362,47 +359,47 @@ fn main() -> Result<(), Error> {
             let (_out, done) = mux::<_, _, _, Error, _>(
                 box_r,
                 box_w,
-                async move |p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>| {
+                move |p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>| {
                     log_packet(&p);
 
-                    // Note that we have to hard code the path to the db here. Otherwise there's a
-                    // borrow checker error if we use `offset_log_path` and `db_path`.
-                    let db = SqliteSsbDb::new("/tmp/ssb-db.sqlite3", "/tmp/ssb-db.offset");
-                    if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
-                        if method.name != ["createHistoryStream"] {
+		    let db = SqliteSsbDb::new(&db_path, &offset_log_path);
+                    async move {
+                        if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
+                            if method.name != ["createHistoryStream"] {
+                                out.send_end(BodyType::Json, "true".to_string().into_bytes())
+                                    .await
+                                    .unwrap();
+                                return Ok(());
+                            }
+                            eprintln!("got a chs request.");
+
+                            let args = method.args[0].clone();
+                            let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
+                            let entries = db
+                                .get_entries_newer_than_sequence(
+                                    &feed_id,
+                                    args.seq - 1,
+                                    args.limit,
+                                    args.keys.unwrap_or(false),
+                                    true,
+                                )
+                                .unwrap();
+
+                            eprintln!("retrieved {} entries", entries.len());
+
+                            let mut strm = futures::stream::iter(entries.into_iter())
+                                .map(|entry| (BodyType::Json, entry));
+
+                            out.send_all(&mut strm).await.unwrap();
                             out.send_end(BodyType::Json, "true".to_string().into_bytes())
                                 .await
                                 .unwrap();
-                            return Ok(());
+                            eprintln!("sent all entries");
+                        } else {
+                            eprintln!("couldn't parse packet as CHSRpcMethod");
                         }
-                        eprintln!("got a chs request.");
-
-                        let args = method.args[0].clone();
-                        let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-                        let entries = db
-                            .get_entries_newer_than_sequence(
-                                &feed_id,
-                                args.seq - 1,
-                                args.limit,
-                                args.keys.unwrap_or(false),
-                                true,
-                            )
-                            .unwrap();
-
-                        eprintln!("retrieved {} entries", entries.len());
-
-                        let mut strm = futures::stream::iter(entries.into_iter())
-                            .map(|entry| (BodyType::Json, entry));
-
-                        out.send_all(&mut strm).await.unwrap();
-                        out.send_end(BodyType::Json, "true".to_string().into_bytes())
-                            .await
-                            .unwrap();
-                        eprintln!("sent all entries");
-                    } else {
-                        eprintln!("couldn't parse packet as CHSRpcMethod");
+                        Ok(())
                     }
-                    Ok(())
                 },
             );
             let done = spawner.spawn_local_with_handle(done).unwrap();
