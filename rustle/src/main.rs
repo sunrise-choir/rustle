@@ -362,7 +362,7 @@ fn main() -> Result<(), Error> {
                 move |p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>| {
                     log_packet(&p);
 
-		    let db = SqliteSsbDb::new(&db_path, &offset_log_path);
+                    let db = SqliteSsbDb::new(&db_path, &offset_log_path);
                     async move {
                         if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
                             if method.name != ["createHistoryStream"] {

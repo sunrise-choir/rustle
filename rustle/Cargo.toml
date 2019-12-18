@@ -14,7 +14,7 @@ serde = "~1.0.90"
 serde_derive = "~1.0.90"
 serde_json = "~1.0.39"
 snafu = { version = "0.6.0", features = ["futures"] }
-ssb-boxstream = {git = "https://github.com/sunrise-choir/ssb-boxstream"}
+ssb-boxstream = "~0.2.1"
 ssb-crypto = "~0.1.3"
 ssb-db = {git = "https://github.com/sunrise-choir/ssb_db"}
 ssb-handshake = "0.5.0"
