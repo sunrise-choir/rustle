@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use futures::channel::mpsc::Receiver;
 use futures::stream::StreamExt;
 use serde_json::Value;
-use snafu::{Snafu, ResultExt as _};
+use snafu::{ResultExt as _, Snafu};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, Packet};
@@ -51,44 +51,44 @@ impl mux::Handler for SyncRpcHandler {
     ) -> Result<(), Self::Error> {
         log_packet(&p);
 
-	let method = serde_json::from_slice::<RpcMethod>(&p.body).
-	    context(ParseBody)?;
+        let method = serde_json::from_slice::<RpcMethod>(&p.body).context(ParseBody)?;
 
-	match &method.name[..] {
-	    [x] if x == "createHistoryStream" => {
+        match &method.name[..] {
+            [x] if x == "createHistoryStream" => {
+                let args = serde_json::from_value::<Vec<CreateHistoryStreamArgs>>(method.args)
+                    .context(ParseArgs)?;
 
-		let args = serde_json::from_value::<Vec<CreateHistoryStreamArgs>>(method.args)
-		    .context(ParseArgs)?;
+                eprintln!("got a chs request.");
 
-		eprintln!("got a chs request.");
+                let args = args[0].clone();
+                let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
+                let entries = {
+                    let db = self.db.lock().unwrap();
+                    db.get_entries_newer_than_sequence(
+                        &feed_id,
+                        args.seq - 1,
+                        args.limit,
+                        args.keys.unwrap_or(false),
+                        true,
+                    )
+                    .context(Db)?
+                };
 
-		let args = args[0].clone();
-		let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-		let entries = {
-		    let db = self.db.lock().unwrap();
-		    db.get_entries_newer_than_sequence(
-			&feed_id,
-			args.seq - 1,
-			args.limit,
-			args.keys.unwrap_or(false),
-			true,
-		    ).context(Db)?
-		};
+                eprintln!("retrieved {} entries", entries.len());
 
-		eprintln!("retrieved {} entries", entries.len());
+                let mut strm =
+                    futures::stream::iter(entries.into_iter()).map(|entry| (BodyType::Json, entry));
 
-		let mut strm =
-		    futures::stream::iter(entries.into_iter()).map(|entry| (BodyType::Json, entry));
-
-		out.send_all(&mut strm).await.context(Send)?;
-		out.send_end(BodyType::Json, "true".to_string().into_bytes())
-		    .await.context(Send)
-	    },
-	    _ => {
+                out.send_all(&mut strm).await.context(Send)?;
                 out.send_end(BodyType::Json, "true".to_string().into_bytes())
-		    .await.context(Send)
-	    }
-	}
+                    .await
+                    .context(Send)
+            }
+            _ => out
+                .send_end(BodyType::Json, "true".to_string().into_bytes())
+                .await
+                .context(Send),
+        }
     }
 }
 

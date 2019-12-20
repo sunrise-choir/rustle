@@ -38,7 +38,7 @@ use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{BodyType, Packet, mux};
+use ssb_packetstream::{mux, BodyType, Packet};
 use ssb_publish::{publish, Content};
 use ssb_validate::{par_validate_message_hash_chain_of_feed, validate_message_hash_chain};
 use ssb_verify_signatures::{par_verify_messages, verify_message};
@@ -308,11 +308,8 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let (_out, done) = mux::mux(
-                box_r,
-                box_w,
-                SyncRpcHandler::new(db_path, offset_log_path),
-            );
+            let (_out, done) =
+                mux::mux(box_r, box_w, SyncRpcHandler::new(db_path, offset_log_path));
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             pool.run_until(done).unwrap();
