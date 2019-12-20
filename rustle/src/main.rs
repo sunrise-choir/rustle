@@ -13,7 +13,6 @@ use clap::{App, Arg, SubCommand};
 use flumedb::flume_log::{self, FlumeLog};
 use flumedb::offset_log::{BidirIterator, LogEntry, OffsetLog};
 
-use futures::channel::mpsc::Receiver;
 use futures::executor::{self, block_on, LocalPool, ThreadPool};
 use futures::future::join;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,11 +38,14 @@ use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, Packet};
+use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, MuxHandler, Packet};
 use ssb_publish::{publish, Content};
 use ssb_validate::{par_validate_message_hash_chain_of_feed, validate_message_hash_chain};
 use ssb_verify_signatures::{par_verify_messages, verify_message};
 use uuid::Uuid;
+
+mod rpc;
+use crate::rpc::*;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -67,24 +69,6 @@ struct SecretFile {
     private: String,
 }
 
-fn ms_since_1970() -> u128 {
-    let now = SystemTime::now();
-    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
-    since_epoch.as_millis()
-}
-
-fn log_packet(p: &Packet) {
-    let s = str::from_utf8(&p.body).unwrap();
-    eprintln!(
-        "In: {} strm:{:?} end:{:?} {:?} {}",
-        p.id,
-        p.is_stream(),
-        p.is_end(),
-        p.body_type,
-        s
-    );
-}
-
 fn decode_b64_key(s: &str) -> Vec<u8> {
     base64::decode_config(s.trim_end_matches(".ed25519"), base64::STANDARD).unwrap()
 }
@@ -106,38 +90,6 @@ fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
     let s = SecretKey::from_slice(&decode_b64_key(&sec.private)).unwrap();
 
     Ok((p, s))
-}
-
-async fn bumrpc(
-    packet: Packet,
-    _sender: MuxChildSender,
-    _receiver: Option<Receiver<Packet>>,
-) -> Result<(), Error> {
-    log_packet(&packet);
-    Ok(())
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct CreateHistoryStreamArgs {
-    id: String,
-    seq: i32,
-    limit: Option<i64>,
-    values: Option<bool>,
-    keys: Option<bool>,
-}
-#[derive(Deserialize, Serialize, Debug)]
-struct CHSRpcMethod {
-    args: Vec<CreateHistoryStreamArgs>,
-    name: Vec<String>,
-    #[serde(rename = "type")]
-    type_key: String,
-}
-#[derive(Deserialize, Serialize, Debug)]
-struct RpcMethod {
-    args: Vec<String>,
-    name: Vec<String>,
-    #[serde(rename = "type")]
-    type_key: String,
 }
 
 fn create_hist_stream_msg(feed_id: &str, start: u32, limit: Option<u32>) -> Vec<u8> {
@@ -356,51 +308,10 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let (_out, done) = mux::<_, _, _, Error, _>(
+            let (_out, done) = mux(
                 box_r,
                 box_w,
-                move |p: Packet, mut out: MuxChildSender, _inn: Option<Receiver<Packet>>| {
-                    log_packet(&p);
-
-                    let db = SqliteSsbDb::new(&db_path, &offset_log_path);
-                    async move {
-                        if let Ok(method) = serde_json::from_slice::<CHSRpcMethod>(&p.body) {
-                            if method.name != ["createHistoryStream"] {
-                                out.send_end(BodyType::Json, "true".to_string().into_bytes())
-                                    .await
-                                    .unwrap();
-                                return Ok(());
-                            }
-                            eprintln!("got a chs request.");
-
-                            let args = method.args[0].clone();
-                            let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
-                            let entries = db
-                                .get_entries_newer_than_sequence(
-                                    &feed_id,
-                                    args.seq - 1,
-                                    args.limit,
-                                    args.keys.unwrap_or(false),
-                                    true,
-                                )
-                                .unwrap();
-
-                            eprintln!("retrieved {} entries", entries.len());
-
-                            let mut strm = futures::stream::iter(entries.into_iter())
-                                .map(|entry| (BodyType::Json, entry));
-
-                            out.send_all(&mut strm).await.unwrap();
-                            out.send_end(BodyType::Json, "true".to_string().into_bytes())
-                                .await
-                                .unwrap();
-                            eprintln!("sent all entries");
-                        } else {
-                            eprintln!("couldn't parse packet as CHSRpcMethod");
-                        }
-                        Ok(())
-                    }
-                },
+                SyncRpcHandler::new(db_path, offset_log_path),
             );
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
@@ -444,7 +355,7 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let (mut out, done) = mux(box_r, box_w, bumrpc);
+            let (mut out, done) = mux(box_r, box_w, PacketLogger {});
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             // I _thought_ that createHistoryStream would get messages greater than latests_seq,
