@@ -38,7 +38,7 @@ use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{mux, BodyType, ChildError, MuxChildSender, MuxHandler, Packet};
+use ssb_packetstream::{BodyType, Packet, mux};
 use ssb_publish::{publish, Content};
 use ssb_validate::{par_validate_message_hash_chain_of_feed, validate_message_hash_chain};
 use ssb_verify_signatures::{par_verify_messages, verify_message};
@@ -56,8 +56,8 @@ pub enum Error {
     #[snafu(display("Failed to connect to remote host: {}", source))]
     TcpConnection { source: std::io::Error },
 
-    #[snafu(display("Mux error: {}", source))]
-    Mux { source: ChildError },
+    #[snafu(display("Mux send error: {}", source))]
+    Mux { source: mux::SendError },
 
     #[snafu(display("Flume error: {}", source))]
     FlumeIo { source: std::io::Error },
@@ -308,7 +308,7 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let (_out, done) = mux(
+            let (_out, done) = mux::mux(
                 box_r,
                 box_w,
                 SyncRpcHandler::new(db_path, offset_log_path),
@@ -355,7 +355,7 @@ fn main() -> Result<(), Error> {
             let mut pool = LocalPool::new();
             let spawner = pool.spawner();
 
-            let (mut out, done) = mux(box_r, box_w, PacketLogger {});
+            let (mut out, done) = mux::mux(box_r, box_w, PacketLogger {});
             let done = spawner.spawn_local_with_handle(done).unwrap();
 
             // I _thought_ that createHistoryStream would get messages greater than latests_seq,
