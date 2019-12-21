@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:sunrise-choir/ssb-keyfile-rs.git
 	branch = master
-	commit = 130806a9ca4ba0b70113087e0a6accabf6fbf5af
-	parent = ce9d34354d47c79c883ace1640cdbd05ff89e699
+	commit = ef256fc0d1239dc19ec7b9d7bbbb827a16ee6457
+	parent = 0102d002fea02b19736e2be8876f7c10583452b9
 	method = merge
 	cmdver = 0.4.0
