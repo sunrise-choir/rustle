@@ -1,9 +1,11 @@
 [workspace]
 
 members = [
-  "rustle",
-  "ssb-packetstream",
-  "ssb-legacy-msg",
   "legacy-msg-data",
+  "rustle",
+  "ssb-crypto",
+  "ssb-keyfile",
+  "ssb-legacy-msg",
   "ssb-multiformats",
+  "ssb-packetstream",
 ]
