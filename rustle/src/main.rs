@@ -1,30 +1,16 @@
-#![allow(unused_imports)]
-
 use std::convert::TryInto;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{decode_config_slice, STANDARD};
 use clap::{App, Arg, SubCommand};
 
-use flumedb::flume_log::{self, FlumeLog};
-use flumedb::offset_log::{BidirIterator, LogEntry, OffsetLog};
-
-use futures::executor::{self, block_on, LocalPool, ThreadPool};
-use futures::future::join;
-use futures::io::{AsyncReadExt, AsyncWriteExt};
-use futures::prelude::*;
-use futures::sink::SinkExt;
+use futures::executor::{block_on, LocalPool};
+use futures::io::AsyncReadExt;
 use futures::task::LocalSpawnExt;
 use futures::StreamExt;
 
-use async_std::net::{TcpListener, TcpStream};
-use futures::task::SpawnExt;
+use async_std::net::TcpStream;
 
-#[macro_use]
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
@@ -34,11 +20,12 @@ use serde_json::Value;
 
 use snafu::{ResultExt, Snafu};
 use ssb_boxstream::BoxStream;
-use ssb_crypto::{NetworkKey, PublicKey, SecretKey};
+use ssb_crypto::{NetworkKey, PublicKey};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_handshake::client;
+use ssb_keyfile::load_keys_from_path;
 use ssb_multiformats::multikey::Multikey;
-use ssb_packetstream::{mux, BodyType, Packet};
+use ssb_packetstream::{mux, BodyType};
 use ssb_publish::{publish, Content};
 use ssb_validate::{par_validate_message_hash_chain_of_feed, validate_message_hash_chain};
 use ssb_verify_signatures::{par_verify_messages, verify_message};
@@ -50,7 +37,7 @@ use crate::rpc::*;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Failed to load secret file: {}", source))]
-    ReadSecretFile { source: std::io::Error },
+    ReadSecretFile { source: ssb_keyfile::Error },
 
     // TODO: more context
     #[snafu(display("Failed to connect to remote host: {}", source))]
@@ -61,35 +48,6 @@ pub enum Error {
 
     #[snafu(display("Flume error: {}", source))]
     FlumeIo { source: std::io::Error },
-}
-
-#[derive(Debug, Deserialize)]
-struct SecretFile {
-    public: String,
-    private: String,
-}
-
-fn decode_b64_key(s: &str) -> Vec<u8> {
-    base64::decode_config(s.trim_end_matches(".ed25519"), base64::STANDARD).unwrap()
-}
-
-fn load_keys_from_path(path: &str) -> io::Result<(PublicKey, SecretKey)> {
-    let f = BufReader::new(File::open(path)?);
-
-    let sec_str = f
-        .lines()
-        .filter_map(|s| s.ok())
-        .filter(|s| !s.starts_with('#'))
-        .collect::<Vec<String>>()
-        .concat();
-
-    // let v = serde_json::from_str::<serde_json::Value>(&sec_str)?;
-    let sec = serde_json::from_str::<SecretFile>(&sec_str)?;
-
-    let p = PublicKey::from_slice(&decode_b64_key(&sec.public)).unwrap();
-    let s = SecretKey::from_slice(&decode_b64_key(&sec.private)).unwrap();
-
-    Ok((p, s))
 }
 
 fn create_hist_stream_msg(feed_id: &str, start: u32, limit: Option<u32>) -> Vec<u8> {
@@ -367,7 +325,7 @@ fn main() -> Result<(), Error> {
                 // verification + validation and appending to the db.
                 let packets = a_in.map(|p| p.body).collect::<Vec<_>>().await;
 
-                if packets.len() > 0 {
+                if !packets.is_empty() {
                     eprintln!("got {} new messages from server", packets.len());
 
                     let previous: Option<Vec<u8>> =

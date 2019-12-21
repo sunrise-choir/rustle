@@ -239,55 +239,51 @@ where
         let in_stream = PacketStream::new(r);
 
         const OPEN_STREAMS_LIMIT: usize = 128;
-        let in_done =
-            in_stream
-                .context(Incoming)
-                .try_for_each_concurrent(OPEN_STREAMS_LIMIT, |p: Packet| {
-                    async {
-                        if p.id < 0 {
-                            let mut response_sinks = response_sinks.lock().unwrap();
-                            if let Some(ref mut sink) = response_sinks.get_mut(&p.id) {
-                                if p.is_stream() && p.is_end() {
-                                    sink.close().await.context(SubStream)
-                                } else {
-                                    sink.send(p).await.context(SubStream)
-                                }
-                            } else {
-                                eprintln!("Unhandled response packet: {:?}", p);
-                                Ok(())
-                            }
+        let in_done = in_stream.context(Incoming).try_for_each_concurrent(
+            OPEN_STREAMS_LIMIT,
+            |p: Packet| async {
+                if p.id < 0 {
+                    let mut response_sinks = response_sinks.lock().unwrap();
+                    if let Some(ref mut sink) = response_sinks.get_mut(&p.id) {
+                        if p.is_stream() && p.is_end() {
+                            sink.close().await.context(SubStream)
                         } else {
-                            let mut maybe_sink = {
-                                let csinks = continuation_sinks.lock().unwrap();
-                                csinks.get(&p.id).map(|s| s.clone())
-                            };
-                            if let Some(ref mut sink) = maybe_sink {
-                                if p.is_stream() && p.is_end() {
-                                    sink.close().await.context(SubStream)
-                                } else {
-                                    sink.send(p).await.context(SubStream)
-                                }
-                            } else if p.is_stream() {
-                                let (inn_sink, inn) = channel();
-                                {
-                                    let mut csinks = continuation_sinks.lock().unwrap();
-                                    csinks.insert(p.id, inn_sink);
-                                }
-                                let sender =
-                                    ChildSender::new(-p.id, p.stream, shared_sender.clone());
-                                handler
-                                    .handle(p, sender, Some(inn))
-                                    .await
-                                    .context(PacketHandler)
-                            } else {
-                                let sender =
-                                    ChildSender::new(-p.id, p.stream, shared_sender.clone());
-                                let inn: Option<ChildReceiver> = None;
-                                handler.handle(p, sender, inn).await.context(PacketHandler)
-                            }
+                            sink.send(p).await.context(SubStream)
                         }
+                    } else {
+                        eprintln!("Unhandled response packet: {:?}", p);
+                        Ok(())
                     }
-                });
+                } else {
+                    let mut maybe_sink = {
+                        let csinks = continuation_sinks.lock().unwrap();
+                        csinks.get(&p.id).map(|s| s.clone())
+                    };
+                    if let Some(ref mut sink) = maybe_sink {
+                        if p.is_stream() && p.is_end() {
+                            sink.close().await.context(SubStream)
+                        } else {
+                            sink.send(p).await.context(SubStream)
+                        }
+                    } else if p.is_stream() {
+                        let (inn_sink, inn) = channel();
+                        {
+                            let mut csinks = continuation_sinks.lock().unwrap();
+                            csinks.insert(p.id, inn_sink);
+                        }
+                        let sender = ChildSender::new(-p.id, p.stream, shared_sender.clone());
+                        handler
+                            .handle(p, sender, Some(inn))
+                            .await
+                            .context(PacketHandler)
+                    } else {
+                        let sender = ChildSender::new(-p.id, p.stream, shared_sender.clone());
+                        let inn: Option<ChildReceiver> = None;
+                        handler.handle(p, sender, inn).await.context(PacketHandler)
+                    }
+                }
+            },
+        );
         let (in_r, out_r) = join(in_done, out_done).await;
         in_r.or(out_r)
     };

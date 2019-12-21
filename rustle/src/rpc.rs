@@ -6,7 +6,6 @@ use snafu::{ResultExt as _, Snafu};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, Packet};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Snafu)]
