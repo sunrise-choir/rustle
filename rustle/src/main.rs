@@ -235,6 +235,9 @@ fn main() -> Result<(), Error> {
                         .help("path to ssb_db sqlite file"),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("generateSecret").about("generate a new ssb secret (key) file"),
+        )
         .get_matches();
 
     match app_m.subcommand() {
@@ -422,6 +425,23 @@ fn main() -> Result<(), Error> {
             println!("{}", std::str::from_utf8(&new_message).unwrap());
 
             db.append_batch(&author, &[new_message]).unwrap();
+
+            Ok(())
+        }
+        ("generateSecret", Some(_sub_m)) => {
+            use std::io::Write;
+
+            let secret_path = app_m.value_of("secret").unwrap();
+
+            let (pk, sk) = ssb_crypto::generate_longterm_keypair();
+
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(secret_path)
+                .expect("secret file already exists")
+                .write_all(ssb_keyfile::new_keyfile_string(&pk, &sk).as_bytes())
+                .expect("could not write to secret file");
 
             Ok(())
         }
