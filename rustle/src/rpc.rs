@@ -1,3 +1,4 @@
+use async_std::sync::Mutex;
 use async_trait::async_trait;
 use futures::channel::mpsc::Receiver;
 use futures::stream::StreamExt;
@@ -6,7 +7,7 @@ use snafu::{ResultExt as _, Snafu};
 use ssb_db::{SqliteSsbDb, SsbDb};
 use ssb_multiformats::multikey::Multikey;
 use ssb_packetstream::{mux, BodyType, Packet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug, Snafu)]
 pub enum RpcError {
@@ -33,7 +34,10 @@ pub struct SyncRpcHandler {
 impl SyncRpcHandler {
     // TODO: should be AsRef<Path>, but SsbDb uses str
     pub fn new<P: AsRef<str>>(db_path: P, offset_log_path: P) -> Self {
-        let db = Arc::new(Mutex::new(SqliteSsbDb::new(&db_path, &offset_log_path)));
+        let db = Arc::new(Mutex::new(
+            // This could block and get the entire async runtime to hang.
+            SqliteSsbDb::new(&db_path, &offset_log_path),
+        ));
         Self { db }
     }
 }
@@ -62,7 +66,9 @@ impl mux::Handler for SyncRpcHandler {
                 let args = args[0].clone();
                 let feed_id = Multikey::from_legacy(args.id.as_bytes()).unwrap().0;
                 let entries = {
-                    let db = self.db.lock().unwrap();
+                    let db = self.db.lock().await;
+
+                    // This could block and get the entire async runtime to hang.
                     db.get_entries_newer_than_sequence(
                         &feed_id,
                         args.seq - 1,
