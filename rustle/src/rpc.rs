@@ -34,10 +34,7 @@ pub struct SyncRpcHandler {
 impl SyncRpcHandler {
     // TODO: should be AsRef<Path>, but SsbDb uses str
     pub fn new<P: AsRef<str>>(db_path: P, offset_log_path: P) -> Self {
-        let db = Arc::new(Mutex::new(
-            // This could block and get the entire async runtime to hang.
-            SqliteSsbDb::new(&db_path, &offset_log_path),
-        ));
+        let db = Arc::new(Mutex::new(SqliteSsbDb::new(&db_path, &offset_log_path)));
         Self { db }
     }
 }
