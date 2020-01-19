@@ -329,17 +329,22 @@ fn main() -> Result<(), Error> {
                     eprintln!("got {} new messages from server", packets.len());
 
                     let previous: Option<Vec<u8>> =
+                        // This could block and get the entire async runtime to hang.
                         db.get_entry_by_seq(&author, latest_seq).unwrap();
 
                     // Later, we should add stuff to store into about broken feeds in the db.
                     // We should store why they broke and even store the offending message.
                     // Then we can do a avoid trying to replicate broken feeds over and over.
+
+                    // This could block and get the entire async runtime to hang.
                     par_validate_message_hash_chain_of_feed(&packets, previous.as_ref()).unwrap();
                     eprintln!("validated messages");
 
+                    // This could block and get the entire async runtime to hang.
                     par_verify_messages(&packets, None).unwrap();
                     eprintln!("verified messages");
 
+                    // This could block and get the entire async runtime to hang.
                     db.append_batch(&author, &packets).unwrap();
 
                     eprintln!("appended {} new messages to db", packets.len());
