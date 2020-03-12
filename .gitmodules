@@ -1,0 +1,18 @@
+[submodule "ssb-crypto"]
+	path = ssb-crypto
+	url = git@github.com:sunrise-choir/ssb-crypto.git
+[submodule "legacy-msg-data"]
+	path = legacy-msg-data
+	url = git@github.com:sunrise-choir/legacy-msg-data.git
+[submodule "ssb-legacy-msg"]
+	path = ssb-legacy-msg
+	url = git@github.com:sunrise-choir/ssb-legacy-msg.git
+[submodule "ssb-multiformats"]
+	path = ssb-multiformats
+	url = git@github.com:sunrise-choir/ssb-multiformats.git
+[submodule "ssb-packetstream"]
+	path = ssb-packetstream
+	url = git@github.com:sunrise-choir/ssb-packetstream.git
+[submodule "ssb-keyfile"]
+	path = ssb-keyfile
+	url = git@github.com:sunrise-choir/ssb-keyfile.git

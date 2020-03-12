@@ -1,3 +1,0 @@
-# SSB Legacy Msg
-
-TODO
